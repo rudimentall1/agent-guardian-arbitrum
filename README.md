@@ -89,6 +89,23 @@ The implementation must guarantee, at minimum:
 
 The protocol specification, threat model, architecture decisions, and project lineage will live under `docs/` as implementation progresses.
 
+## Development
+
+Standard workflow (with normal network access):
+
+```
+npm install
+npx hardhat compile
+npx hardhat test
+```
+
+`scripts/compile.js` exists only as a fallback for network-restricted
+sandboxes where `binaries.soliditylang.org` isn't reachable — it compiles
+via the `solc` npm package instead of Hardhat's own downloader and writes
+artifacts in the same shape. If you have normal network access you don't
+need it; `npx hardhat compile` will download the compiler itself. See
+`docs/gate-1-agent-registry.md` for why this exists.
+
 ## Networks
 
 The first target is Robinhood Chain testnet, followed by Arbitrum testnet integration and production-ready deployment only after the security gates pass.

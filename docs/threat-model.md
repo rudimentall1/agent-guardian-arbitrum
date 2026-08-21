@@ -49,3 +49,17 @@ The critical boundary is the on-chain Execution Guard. Off-chain components can 
 - economic attacks against external markets
 
 These boundaries will be refined as implementation and adversarial testing progress.
+
+## Gate 1 status (AgentRegistry)
+
+`AgentRegistry` is implemented and adversarially tested — see
+`docs/gate-1-agent-registry.md` for the full report. One limitation
+carried forward explicitly rather than silently: registration signatures
+are verified with plain ECDSA recovery only. An agent or owner address
+that is itself a smart-contract wallet (ERC-1271) cannot currently
+register or be registered as an agent identity — `ECDSA.recover` has no
+path to call `isValidSignature` on a contract. This is out of scope for
+Gate 1 and must be resolved (either by adding ERC-1271 support via
+OpenZeppelin's `SignatureChecker`, or by an explicit documented
+restriction to EOA agent keys) before Gate 2 assumes agent identities can
+be anything other than EOAs.
