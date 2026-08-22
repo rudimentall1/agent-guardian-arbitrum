@@ -89,3 +89,25 @@ Risk signals may be probabilistic and may include AI-assisted analysis. Risk out
 ## 10. Required invariants
 
 See the invariant list in the root README. Each invariant must have at least one regression test and, where practical, a fuzz/property test before deployment.
+
+## 11. Gate 2 implementation status
+
+`AgentExecutionGuard` (Gate 2) implements sections 3, 6 (partially), and 8
+as actually deployed code — the rest of section 6's flow (policy status,
+mandate checks, approval) remains specification only, not yet
+implemented. Concretely, `AgentExecutionGuard.execute` currently checks,
+in this order: deadline, live `AgentRegistry.isActiveAgent` status,
+nonce, EIP-712 signature — then consumes the nonce and performs the
+external call atomically (the whole transaction reverts, nonce included,
+if the call fails). See `docs/gate-2-execution-guard.md` for the full
+report and `docs/adr/0002-monotonic-per-agent-nonce.md` for why the nonce
+is a monotonic per-agent counter rather than a bitmap.
+
+Not yet implemented, and must not be assumed present by anything
+integrating with this contract: `policyHash` is accepted and bound into
+the signature (so it cannot be forged or altered later) but is not yet
+checked against any on-chain policy state — that is PolicyRegistry, a
+later gate. No mandate/spending-limit checks exist. No approval flow
+exists. This contract does not custody funds; `value` forwarded through
+`execute` is funded by the caller's `msg.value` for that transaction
+only.
