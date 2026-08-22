@@ -63,3 +63,25 @@ Gate 1 and must be resolved (either by adding ERC-1271 support via
 OpenZeppelin's `SignatureChecker`, or by an explicit documented
 restriction to EOA agent keys) before Gate 2 assumes agent identities can
 be anything other than EOAs.
+
+## Gate 3 status (PolicyRegistry)
+
+`PolicyRegistry` is implemented and adversarially tested — see
+`docs/gate-3-policy-registry.md` for the full report. Against the
+"Required properties" list above, Gate 3 satisfies property 5 (policy
+revocation takes effect at the boundary — `isCallAllowedByPolicy` reads
+`active` live) for the static portion of a mandate. It does **not**
+satisfy property 7 (financial limits checked deterministically) in full:
+`maxTxValue` is checked, but `dailyLimit` and `approvalThreshold` are
+stored, unenforced numbers with no contract in this repository tracking
+cumulative spend against them yet. Property 8 (approval cannot widen
+authority) has no approval flow to evaluate — none exists.
+
+**Explicitly out of scope, not silently dropped:** `PolicyRegistry` and
+`AgentExecutionGuard` (Gate 2) do not talk to each other yet. A signed
+`AgentExecutionGuard` intent's `policyHash` field is not checked against
+`PolicyRegistry.policyHashOf` anywhere in this repository. Until that
+wiring exists (a future gate), `PolicyRegistry` is a standalone
+commitment/storage layer with no actual bearing on what
+`AgentExecutionGuard.execute` will allow — do not assume a revoked policy
+stops any execution today.

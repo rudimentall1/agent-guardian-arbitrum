@@ -89,3 +89,26 @@ Risk signals may be probabilistic and may include AI-assisted analysis. Risk out
 ## 10. Required invariants
 
 See the invariant list in the root README. Each invariant must have at least one regression test and, where practical, a fuzz/property test before deployment.
+
+## 11. Gate 3 implementation status
+
+`PolicyRegistry` implements the storage half of section 5 (financial
+mandate) and the commitment half of section 4 (policy commitment): an
+owner creates an immutable mandate (`maxTxValue`, `dailyLimit`,
+`approvalThreshold`, `validFrom`/`validUntil`, allowed targets, allowed
+selectors), gets back a deterministic `policyId` and a `policyHash`
+committing to every field, and can revoke/reactivate the whole mandate
+(coarse-grained; see `docs/adr/0003-immutable-policy-derived-identifier.md`).
+A view function, `isCallAllowedByPolicy`, performs the *static* checks
+(active, within time window, target allowed, selector allowed, value
+within `maxTxValue`) that don't require execution-time state.
+
+**Not yet implemented:** `dailyLimit` and `approvalThreshold` are stored
+but not enforced — no contract in this repository currently tracks
+cumulative spend against them. `AgentExecutionGuard` (Gate 2, developed
+on a separate branch not yet merged with this one) does not consult
+`PolicyRegistry` at all yet — wiring a signed intent's `policyHash` field
+against `PolicyRegistry.policyHashOf`, and adding rolling-spend
+enforcement, is the next gate on top of both, done separately so each
+gate stays small and independently reviewable. See
+`docs/gate-3-policy-registry.md` for the full report.
