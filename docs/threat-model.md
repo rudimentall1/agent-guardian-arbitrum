@@ -102,3 +102,39 @@ unless the new owner separately arranges for a fresh agent key to be
 registered instead. This is a business-process trust boundary outside
 what either contract's cryptography can enforce, and is covered by a
 regression test in `contracts-test/AgentExecutionGuard.integration.test.ts`.
+
+## Gate 3 status (PolicyRegistry)
+
+`PolicyRegistry` is implemented and adversarially tested — see
+`docs/gate-3-policy-registry.md` for the full report. As originally
+shipped, `PolicyRegistry` and `AgentExecutionGuard` did not talk to each
+other at all — a signed intent's `policyHash` field was accepted and
+bound into the signature but never checked against any registry state.
+See the remediation gate below for the first piece of that integration.
+
+## Remediation gate status (pre-Gate-4)
+
+Two architectural gaps were found by examining Gate 2 and Gate 3
+together and fixed before Gate 4: see
+`docs/adr/0004-msg-value-and-policy-agent-binding.md` and
+`docs/gate-remediation-msg-value-policy-binding.md` for full detail.
+
+1. **`msg.value` was not bound to the signed intent's `value` field.** A
+   caller could send arbitrary native currency regardless of what the
+   agent actually signed for; the guard now reverts unless
+   `msg.value == value` exactly.
+2. **A `policyHash` was not bound to any specific agent.** Nothing
+   prevented Agent A's intent from referencing a policy that
+   `PolicyRegistry` had recorded as belonging to Agent B — the mere fact
+   that *a* valid, active policy existed for *some* agent was previously
+   sufficient to reference it from any intent, since Gate 2 didn't check
+   `policyHash` against `PolicyRegistry` at all. `PolicyRegistry` now
+   records a single agent per policy at creation, and
+   `AgentExecutionGuard.execute` rejects any intent whose `policyHash`
+   does not resolve to the intent's own `agent`.
+
+Explicitly **not** addressed by this remediation gate — still open going
+into Gate 4: `maxTxValue`/target/selector enforcement inside
+`AgentExecutionGuard` itself (currently only `PolicyRegistry`'s own view
+function checks these, unconnected to actual execution), `dailyLimit` and
+`approvalThreshold` accounting, and any approval flow.
