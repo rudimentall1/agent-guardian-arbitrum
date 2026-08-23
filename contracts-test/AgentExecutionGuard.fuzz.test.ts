@@ -83,7 +83,11 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
     await registry.setActive(agent.address, true);
 
     const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-    guard = await Guard.deploy(await registry.getAddress());
+    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
+    const policyRegistry = await MockPolicyRegistry.deploy();
+    await policyRegistry.waitForDeployment();
+    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
+    guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
 

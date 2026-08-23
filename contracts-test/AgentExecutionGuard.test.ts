@@ -6,6 +6,9 @@ describe("AgentExecutionGuard", function () {
   let guard: any;
   let guardAddress: string;
   let registry: any;
+  let registryAddress: string;
+  let policyRegistry: any;
+  let policyRegistryAddress: string;
   let target: any;
   let targetAddress: string;
   let reverter: any;
@@ -18,6 +21,14 @@ describe("AgentExecutionGuard", function () {
 
   const ZERO_HASH = ethers.ZeroHash;
   const FAR_DEADLINE = 4102444800n; // 2100-01-01, far enough for all tests
+
+  // Deterministic per-agent default policyHash, so most tests get a
+  // pre-bound, active policy "for free" without needing to think about
+  // the remediation gate's policy-agent binding check. Tests that
+  // specifically exercise that check use their own explicit hashes.
+  function defaultPolicyHashFor(agentAddr: string) {
+    return ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["address", "string"], [agentAddr, "default-policy"]));
+  }
 
   const types = {
     ExecutionIntent: [
@@ -79,7 +90,7 @@ describe("AgentExecutionGuard", function () {
       p.deadline,
       p.policyHash,
       signature,
-      overrides
+      { value: p.value, ...overrides }
     );
   }
 
@@ -92,7 +103,7 @@ describe("AgentExecutionGuard", function () {
       data: "0x",
       nonce,
       deadline: FAR_DEADLINE,
-      policyHash: ZERO_HASH,
+      policyHash: defaultPolicyHashFor(agentAddr),
       ...overrides,
     };
   }
@@ -105,11 +116,19 @@ describe("AgentExecutionGuard", function () {
     const MockRegistry = await ethers.getContractFactory("MockAgentRegistry");
     registry = await MockRegistry.deploy();
     await registry.waitForDeployment();
+    registryAddress = await registry.getAddress();
     await registry.setActive(agentA.address, true);
     await registry.setActive(agentB.address, true);
 
+    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
+    policyRegistry = await MockPolicyRegistry.deploy();
+    await policyRegistry.waitForDeployment();
+    policyRegistryAddress = await policyRegistry.getAddress();
+    await policyRegistry.setBinding(defaultPolicyHashFor(agentA.address), agentA.address, true);
+    await policyRegistry.setBinding(defaultPolicyHashFor(agentB.address), agentB.address, true);
+
     const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-    guard = await Guard.deploy(await registry.getAddress());
+    guard = await Guard.deploy(registryAddress, policyRegistryAddress);
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
 
@@ -131,7 +150,7 @@ describe("AgentExecutionGuard", function () {
 
       await expect(execute(intent, sig))
         .to.emit(guard, "IntentExecuted")
-        .withArgs(agentA.address, walletA.address, targetAddress, 0n, ZERO_HASH);
+        .withArgs(agentA.address, walletA.address, targetAddress, 0n, defaultPolicyHashFor(agentA.address));
 
       expect(await guard.nextNonce(agentA.address)).to.equal(1n);
       expect(await target.callCount()).to.equal(1n);
@@ -246,7 +265,12 @@ describe("AgentExecutionGuard", function () {
       const intentForA = await baseIntent(agentA.address, walletA.address, 0n);
       const sig = await signIntent(agentA, intentForA);
       const tampered = { ...intentForA, agent: agentB.address };
-      await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
+      // this now fails at the remediation gate's policy-agent binding
+      // check before even reaching signature verification: the
+      // (unchanged) policyHash is bound to agentA, not agentB. Either
+      // check independently prevents the attack; PolicyAgentMismatch
+      // simply runs first in the check ordering.
+      await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
     });
   });
 
@@ -276,7 +300,7 @@ describe("AgentExecutionGuard", function () {
   describe("attack 7: cross-contract replay", function () {
     it("rejects a signature produced for a different guard deployment", async function () {
       const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-      const otherGuard = await Guard.deploy(await registry.getAddress());
+      const otherGuard = await Guard.deploy(registryAddress, policyRegistryAddress);
       await otherGuard.waitForDeployment();
       const otherGuardAddress = await otherGuard.getAddress();
 
@@ -355,7 +379,14 @@ describe("AgentExecutionGuard", function () {
       const intent = await baseIntent(agentA.address, walletA.address, 0n);
       const sig = await signIntent(agentA, intent);
       const tampered = { ...intent, policyHash: ethers.keccak256(ethers.toUtf8Bytes("different-policy")) };
-      await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
+      // the substituted policyHash was never registered with any agent
+      // binding, so the remediation gate's policy-agent check rejects it
+      // (boundAgent == address(0) != agentA) before signature
+      // verification is even reached. The signature itself would have
+      // failed too (digest commits to the original policyHash) — this
+      // test only confirms which check surfaces first, not that the
+      // attack succeeds by either path.
+      await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
     });
 
     it("rejects a signed intent with only the wallet field changed", async function () {
@@ -595,7 +626,12 @@ describe("AgentExecutionGuard", function () {
 
     it("constructor rejects a zero registry address", async function () {
       const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-      await expect(Guard.deploy(ethers.ZeroAddress)).to.be.revertedWithCustomError(Guard, "ZeroAddress");
+      await expect(Guard.deploy(ethers.ZeroAddress, policyRegistryAddress)).to.be.revertedWithCustomError(Guard, "ZeroAddress");
+    });
+
+    it("constructor rejects a zero policy registry address", async function () {
+      const Guard = await ethers.getContractFactory("AgentExecutionGuard");
+      await expect(Guard.deploy(registryAddress, ethers.ZeroAddress)).to.be.revertedWithCustomError(Guard, "ZeroAddress");
     });
   });
 });

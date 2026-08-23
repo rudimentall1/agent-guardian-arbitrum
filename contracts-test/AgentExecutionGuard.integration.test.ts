@@ -13,6 +13,8 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
   let registryAddress: string;
   let guard: any;
   let guardAddress: string;
+  let policyRegistry: any;
+  let policyRegistryAddress: string;
   let target: any;
   let targetAddress: string;
   let owner: HardhatEthersSigner;
@@ -85,7 +87,12 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
     registryAddress = await registry.getAddress();
 
     const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-    guard = await Guard.deploy(registryAddress);
+    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
+    policyRegistry = await MockPolicyRegistry.deploy();
+    await policyRegistry.waitForDeployment();
+    policyRegistryAddress = await policyRegistry.getAddress();
+    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
+    guard = await Guard.deploy(registryAddress, policyRegistryAddress);
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
 
