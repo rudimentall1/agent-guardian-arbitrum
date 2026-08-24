@@ -81,8 +81,9 @@ describe("Remediation gate: msg.value binding + policy ownership binding", funct
         ethers.parseEther("50"),
         0n,
         FAR_DEADLINE,
-        [targetAddress],
-        [SELECTOR]
+        [], // no function-call authorizations needed — every intent in
+            // this file uses empty calldata (native transfer)
+        [targetAddress]
       );
     await tx.wait();
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
