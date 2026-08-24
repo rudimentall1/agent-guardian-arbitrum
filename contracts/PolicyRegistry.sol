@@ -2,10 +2,12 @@
 pragma solidity 0.8.24;
 
 /// @title PolicyRegistry
-/// @notice Gate 3: on-chain storage and commitment for financial
-/// mandates. A mandate is the maximum authority a wallet owner delegates
-/// under a given policy — allowed target contracts, allowed function
-/// selectors, a per-transaction value cap, and an active time window.
+/// @notice Gate 3 + remediation + Gate 4A: on-chain storage and
+/// commitment for financial mandates. A mandate is the maximum
+/// authority a wallet owner delegates under a given policy — a
+/// per-transaction native-value cap, an active time window, and a set
+/// of specifically authorized (target, selector) call pairs plus
+/// specifically authorized native-transfer targets.
 ///
 /// Design decisions and why:
 ///
@@ -14,57 +16,80 @@ pragma solidity 0.8.24;
 ///    `reactivate`, which flip a single `active` bit and change nothing
 ///    else. This follows directly from docs/protocol-spec.md section 4:
 ///    "changing policy does not silently change the meaning of an
-///    already signed intent." If mandate values could be mutated under
-///    an existing `policyId`, an owner could sign a narrow, reviewed
-///    mandate, let an agent's operator countersign intents against its
-///    `policyHash`, then quietly widen the mandate under the same hash.
-///    A new mandate is a new `policyId` with its own `policyHash`,
-///    full stop.
+///    already signed intent." A new mandate is a new `policyId` with
+///    its own `policyHash`, full stop.
 ///
-/// 2. `allowedTargets` / `allowedSelectors` are explicit allow-lists,
-///    fixed at creation. There is no "allow all" wildcard. An empty list
-///    means nothing is allowed under that dimension — fail closed, not
-///    fail open.
+/// 2. [Gate 4A] Authorization is a PAIRED (target, selector) tuple, not
+///    two independent allow-lists. Gate 3's original representation —
+///    `allowedTargets = {A, B}` and `allowedSelectors = {X, Y}` checked
+///    independently — accidentally authorized the full Cartesian
+///    product `{A+X, A+Y, B+X, B+Y}` even when only `A+X` and `B+Y` were
+///    ever intended. That is a real privilege-escalation bug, not a
+///    theoretical one: an owner who meant to allow "transfer() on token
+///    A" and "approve() on token B" would have unknowingly also
+///    authorized "approve() on token A" and "transfer() on token B".
+///    This gate replaces both allow-lists with a single mapping keyed by
+///    `keccak256(abi.encode(target, selector))`, so only the exact pairs
+///    explicitly authorized at creation are ever allowed. See
+///    docs/adr/0005-paired-target-selector-authorization.md for the
+///    full analysis of alternatives (including why a raw `mapping(target
+///    => mapping(selector => bool))` was rejected in favor of a single
+///    flattened key).
 ///
-/// 3. `dailyLimit` and `approvalThreshold` are stored as declared limits
-///    only. This contract does NOT track cumulative spend against them —
-///    that requires execution-time state (what has actually been spent,
-///    and when "today" resets) which belongs with whatever contract
-///    actually executes transactions against a mandate. Tracking it here
-///    would mean two contracts independently guessing at the same
-///    accounting, which is a correctness hazard, not a security feature.
-///    See docs/gate-3-policy-registry.md for what this gate does and
-///    does not enforce.
+/// 3. [Gate 4A] Native-value transfers (`data.length == 0`) are a
+///    SEPARATE authorization dimension from function calls, tracked in
+///    `mapping(policyId => mapping(target => bool))`, never through the
+///    (target, selector) mapping. Overloading selector `0x00000000` to
+///    mean "native transfer" was rejected: `0x00000000` is a real,
+///    reachable function selector (any function whose signature hashes
+///    to all-zero bytes), and conflating it with "no calldata" would let
+///    a policy that authorizes that one unlucky selector for a target
+///    also silently authorize plain ETH transfers to that target, or
+///    vice versa. See the ADR, "empty calldata semantics".
 ///
-/// 4. No ownership transfer. A policy's `owner` is fixed at creation.
-///    An abandoned or misconfigured policy is revoked and superseded by
-///    a freshly created one under the correct owner — the same
-///    deliberate non-goal as AgentRegistry's lack of agent-address
-///    reassignment (see AgentRegistry's NatSpec, point 3).
+/// 4. `dailyLimit` and `approvalThreshold` remain stored declared limits
+///    only, not enforced here or anywhere in this repository yet — see
+///    contract-level NatSpec point 3 in the pre-Gate-4A version of this
+///    file (docs/gate-3-policy-registry.md) and
+///    docs/gate-4a-call-authorization.md for current status. `maxTxValue`
+///    IS enforced starting this gate, via `checkAuthorization` below.
 ///
-/// 5. The on-chain policy identifier is `keccak256(abi.encode(owner,
-///    salt))`, derived automatically from the caller's own address and a
-///    caller-chosen `salt`, not taken as a raw caller-supplied key. A
-///    raw caller-supplied global identifier (as in earlier drafts of
-///    this contract) would let one owner front-run another's expected
-///    `policyId` to deny them that slot — a real griefing vector, unlike
-///    AgentRegistry's agent-address identity, where squatting requires
-///    the squatter to actually control the corresponding private key.
-///    Deriving the identifier from `(owner, salt)` makes that collision
-///    structurally impossible rather than merely discouraged by
-///    convention: only `owner` can ever produce their own identifiers,
-///    for any `salt` they choose.
+/// 5. No ownership transfer, and the on-chain identifier is
+///    `keccak256(abi.encode(owner, salt))` — unchanged from Gate 3, see
+///    docs/adr/0003-immutable-policy-derived-identifier.md.
 ///
-/// 6. [Remediation gate] Every policy is bound to exactly one `agent` at
-///    creation, immutably, alongside its `owner`. Before this gate,
-///    `policyHash` was an opaque commitment with no recorded relationship
-///    to any specific agent — nothing stopped Agent A's signed intent
-///    from referencing a policy that was conceptually meant only for
-///    Agent B, because no contract anywhere checked which agent a policy
-///    "belonged to" in the first place. `resolvePolicyBinding` exposes
-///    this relationship for `AgentExecutionGuard` to enforce. See
+/// 6. Every policy is bound to exactly one `agent` at creation,
+///    immutably — unchanged from the remediation gate, see
 ///    docs/adr/0004-msg-value-and-policy-agent-binding.md.
 contract PolicyRegistry {
+    /// @notice One explicitly authorized (target, selector) function-call
+    /// pair, supplied at policy creation.
+    struct AuthorizedCall {
+        address target;
+        bytes4 selector;
+    }
+
+    /// @notice How `AgentExecutionGuard` classifies the calldata of an
+    /// execution intent before asking this registry whether it's
+    /// authorized. Computed by the Guard from the actual signed calldata
+    /// — see contract-level NatSpec point 3 and the ADR's discussion of
+    /// the classification/authorization responsibility split.
+    ///   NativeTransfer — `data.length == 0`.
+    ///   FunctionCall   — `data.length >= 4`; `selector` is the first 4
+    ///                     bytes.
+    ///   Malformed      — `1 <= data.length <= 3`: neither a native
+    ///                     transfer (data isn't empty) nor a complete
+    ///                     selector (fewer than 4 bytes). NEVER
+    ///                     authorized, unconditionally, regardless of
+    ///                     policy configuration — there is no mapping
+    ///                     lookup for this case at all, so it cannot be
+    ///                     accidentally authorized by any stored entry.
+    enum CallKind {
+        NativeTransfer,
+        FunctionCall,
+        Malformed
+    }
+
     struct Mandate {
         address owner;
         address agent;
@@ -79,12 +104,16 @@ contract PolicyRegistry {
     mapping(bytes32 => Mandate) private _mandates;
     mapping(bytes32 => bytes32) public policyHashOf;
     mapping(bytes32 => bytes32) public policyIdOfHash;
-    mapping(bytes32 => mapping(address => bool)) private _allowedTargets;
-    mapping(bytes32 => mapping(bytes4 => bool)) private _allowedSelectors;
+    /// @dev policyId => keccak256(abi.encode(target, selector)) => authorized
+    mapping(bytes32 => mapping(bytes32 => bool)) private _authorizedCalls;
+    /// @dev policyId => target => native-transfer authorized
+    mapping(bytes32 => mapping(address => bool)) private _authorizedNativeTransfer;
 
     event PolicyCreated(bytes32 indexed policyId, address indexed owner, address indexed agent, bytes32 salt, bytes32 policyHash);
     event PolicyRevoked(bytes32 indexed policyId, address indexed owner);
     event PolicyReactivated(bytes32 indexed policyId, address indexed owner);
+    event CallAuthorized(bytes32 indexed policyId, address indexed target, bytes4 selector);
+    event NativeTransferAuthorized(bytes32 indexed policyId, address indexed target);
 
     error PolicyAlreadyExists(bytes32 policyId);
     error PolicyNotFound(bytes32 policyId);
@@ -93,7 +122,7 @@ contract PolicyRegistry {
     error PolicyAlreadyInactive(bytes32 policyId);
     error InvalidTimeWindow(uint64 validFrom, uint64 validUntil);
     error ZeroAddress();
-    error EmptyAllowLists();
+    error EmptyAuthorization();
 
     /// @notice Derive the policy identifier for `owner` and `salt`
     /// without creating anything — lets a caller compute their future
@@ -102,12 +131,28 @@ contract PolicyRegistry {
         return keccak256(abi.encode(owner, salt));
     }
 
+    /// @notice Derive the flattened storage key for a (target, selector)
+    /// pair. Exposed so off-chain tooling and tests can compute it
+    /// independently and confirm it matches on-chain behavior.
+    function authorizedCallKey(address target, bytes4 selector) public pure returns (bytes32) {
+        return keccak256(abi.encode(target, selector));
+    }
+
     /// @notice Create a new, immutable policy owned by the caller and
-    /// bound to exactly one `agent`. The identifier is derived as
-    /// `computePolicyId(msg.sender, salt)` — see contract-level NatSpec,
-    /// point 5. Reverts if that identifier has ever been used before,
-    /// regardless of its prior active state (same exactly-once semantics
-    /// as AgentRegistry.register).
+    /// bound to exactly one `agent`. `calls` authorizes specific
+    /// (target, selector) function-call pairs; `nativeTransferTargets`
+    /// separately authorizes plain ETH transfers (empty calldata) to
+    /// specific targets. At least one authorization of either kind is
+    /// required — a policy authorizing nothing is a misconfiguration,
+    /// not a valid "deny everything" policy (deny-everything is simply
+    /// not creating a policy at all, or revoking one).
+    ///
+    /// Duplicate entries within `calls` (the same (target, selector)
+    /// pair listed twice) or within `nativeTransferTargets` are harmless
+    /// no-ops — the second write to the same storage slot has no
+    /// additional effect — and are not rejected; requiring on-chain
+    /// duplicate detection would need an O(n^2) scan for no security
+    /// benefit.
     function createPolicy(
         bytes32 salt,
         address agent,
@@ -116,21 +161,24 @@ contract PolicyRegistry {
         uint128 approvalThreshold,
         uint64 validFrom,
         uint64 validUntil,
-        address[] calldata allowedTargets,
-        bytes4[] calldata allowedSelectors
+        AuthorizedCall[] calldata calls,
+        address[] calldata nativeTransferTargets
     ) external returns (bytes32 policyId) {
         if (agent == address(0)) revert ZeroAddress();
         policyId = computePolicyId(msg.sender, salt);
         if (_mandates[policyId].owner != address(0)) revert PolicyAlreadyExists(policyId);
         if (validUntil <= validFrom) revert InvalidTimeWindow(validFrom, validUntil);
-        if (allowedTargets.length == 0 || allowedSelectors.length == 0) revert EmptyAllowLists();
+        if (calls.length == 0 && nativeTransferTargets.length == 0) revert EmptyAuthorization();
 
-        for (uint256 i = 0; i < allowedTargets.length; i++) {
-            if (allowedTargets[i] == address(0)) revert ZeroAddress();
-            _allowedTargets[policyId][allowedTargets[i]] = true;
+        for (uint256 i = 0; i < calls.length; i++) {
+            if (calls[i].target == address(0)) revert ZeroAddress();
+            _authorizedCalls[policyId][authorizedCallKey(calls[i].target, calls[i].selector)] = true;
+            emit CallAuthorized(policyId, calls[i].target, calls[i].selector);
         }
-        for (uint256 i = 0; i < allowedSelectors.length; i++) {
-            _allowedSelectors[policyId][allowedSelectors[i]] = true;
+        for (uint256 i = 0; i < nativeTransferTargets.length; i++) {
+            if (nativeTransferTargets[i] == address(0)) revert ZeroAddress();
+            _authorizedNativeTransfer[policyId][nativeTransferTargets[i]] = true;
+            emit NativeTransferAuthorized(policyId, nativeTransferTargets[i]);
         }
 
         _mandates[policyId] = Mandate({
@@ -154,8 +202,8 @@ contract PolicyRegistry {
                 approvalThreshold,
                 validFrom,
                 validUntil,
-                keccak256(abi.encode(allowedTargets)),
-                keccak256(abi.encode(allowedSelectors))
+                keccak256(abi.encode(calls)),
+                keccak256(abi.encode(nativeTransferTargets))
             )
         );
         policyHashOf[policyId] = policyHash;
@@ -175,8 +223,10 @@ contract PolicyRegistry {
     }
 
     /// @notice Reactivate a previously revoked policy. Only the owner
-    /// may call this. Mandate values are untouched — reactivation cannot
-    /// change what was originally committed to `policyHashOf[policyId]`.
+    /// may call this. Mandate values and all (target, selector) /
+    /// native-transfer authorizations are untouched — reactivation
+    /// cannot change what was originally committed to
+    /// `policyHashOf[policyId]`.
     function reactivatePolicy(bytes32 policyId) external {
         Mandate storage m = _mandates[policyId];
         if (m.owner == address(0)) revert PolicyNotFound(policyId);
@@ -186,31 +236,58 @@ contract PolicyRegistry {
         emit PolicyReactivated(policyId, msg.sender);
     }
 
-    /// @notice Static mandate check: is `target`/`selector`/`value`
-    /// within this policy's declared authority right now? Does NOT check
-    /// cumulative daily spend or approval-threshold routing — those
-    /// require execution-time state this contract does not hold. See
-    /// contract-level NatSpec, point 3.
-    function isCallAllowedByPolicy(bytes32 policyId, address target, bytes4 selector, uint256 value)
+    /// @notice [Gate 4A] The single combined authorization check
+    /// `AgentExecutionGuard.execute` uses. Takes a `policyHash` (as
+    /// carried in a signed ExecutionIntent), the intent's `target`, a
+    /// `callKind`/`selector` pair already classified by the Guard from
+    /// the intent's actual calldata (see the `CallKind` NatSpec), and
+    /// the intent's `value`. Returns every piece of information the
+    /// Guard needs to produce a specific, auditable revert reason,
+    /// rather than one opaque boolean:
+    ///
+    ///   agent        — the single agent this policy is bound to.
+    ///   active       — the owner-controlled revoke/reactivate bit.
+    ///   withinWindow — whether `block.timestamp` is inside
+    ///                  [validFrom, validUntil].
+    ///   valueAllowed — whether `value <= maxTxValue`.
+    ///   callAllowed  — whether this exact (target, callKind, selector)
+    ///                  was explicitly authorized at creation.
+    ///
+    /// A `Malformed` `callKind` always returns `callAllowed = false`
+    /// without any storage read — see the `CallKind` NatSpec for why
+    /// this must never fall through to a real mapping lookup.
+    ///
+    /// This is a single external call by design (see
+    /// docs/adr/0005-paired-target-selector-authorization.md, "gas/DoS")
+    /// rather than the Guard making several round trips.
+    function checkAuthorization(bytes32 policyHash, address target, CallKind callKind, bytes4 selector, uint256 value)
         external
         view
-        returns (bool)
+        returns (address agent, bool active, bool withinWindow, bool valueAllowed, bool callAllowed)
     {
+        bytes32 policyId = policyIdOfHash[policyHash];
         Mandate storage m = _mandates[policyId];
-        if (m.owner == address(0) || !m.active) return false;
-        if (block.timestamp < m.validFrom || block.timestamp > m.validUntil) return false;
-        if (value > m.maxTxValue) return false;
-        if (!_allowedTargets[policyId][target]) return false;
-        if (!_allowedSelectors[policyId][selector]) return false;
-        return true;
+
+        agent = m.agent;
+        active = m.active;
+        withinWindow = (block.timestamp >= m.validFrom && block.timestamp <= m.validUntil);
+        valueAllowed = (value <= m.maxTxValue);
+
+        if (callKind == CallKind.NativeTransfer) {
+            callAllowed = _authorizedNativeTransfer[policyId][target];
+        } else if (callKind == CallKind.FunctionCall) {
+            callAllowed = _authorizedCalls[policyId][authorizedCallKey(target, selector)];
+        } else {
+            callAllowed = false;
+        }
     }
 
-    function isTargetAllowed(bytes32 policyId, address target) external view returns (bool) {
-        return _allowedTargets[policyId][target];
+    function isCallAuthorized(bytes32 policyId, address target, bytes4 selector) external view returns (bool) {
+        return _authorizedCalls[policyId][authorizedCallKey(target, selector)];
     }
 
-    function isSelectorAllowed(bytes32 policyId, bytes4 selector) external view returns (bool) {
-        return _allowedSelectors[policyId][selector];
+    function isNativeTransferAuthorized(bytes32 policyId, address target) external view returns (bool) {
+        return _authorizedNativeTransfer[policyId][target];
     }
 
     function getMandate(bytes32 policyId) external view returns (Mandate memory) {
@@ -229,14 +306,12 @@ contract PolicyRegistry {
         return _mandates[policyId].agent;
     }
 
-    /// @notice [Remediation gate] Resolve a `policyHash` — as carried in
-    /// a signed ExecutionIntent — to the single agent it was created for
-    /// and whether it is currently active. Returns `(address(0), false)`
-    /// for any `policyHash` that was never produced by `createPolicy`.
-    /// This is the exact surface `AgentExecutionGuard` needs to enforce
-    /// "an intent's policy must belong to that same agent" without
-    /// exposing mandate content (`maxTxValue`, allow-lists, spend limits)
-    /// that remains out of scope until Gate 4.
+    /// @notice [Remediation gate] Resolve a `policyHash` to the single
+    /// agent it was created for and whether it is currently active.
+    /// Returns `(address(0), false)` for any `policyHash` that was never
+    /// produced by `createPolicy`. Retained alongside `checkAuthorization`
+    /// for callers (or tests) that only need the agent-binding check
+    /// without the Gate 4A mandate-content checks.
     function resolvePolicyBinding(bytes32 policyHash) external view returns (address agent, bool active) {
         bytes32 policyId = policyIdOfHash[policyHash];
         Mandate storage m = _mandates[policyId];
