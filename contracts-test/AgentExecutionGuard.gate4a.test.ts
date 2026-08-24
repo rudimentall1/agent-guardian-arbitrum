@@ -353,6 +353,98 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded").withArgs(value, policyHash);
     });
 
+    // --- Post-hostile-review addition: uint128/uint256 boundary regression ---
+    //
+    // These two tests require msg.value at the scale of type(uint128).max /
+    // type(uint256).max wei — many orders of magnitude beyond what any
+    // hardhat default account holds (~10000 ETH). Real fund transfer at
+    // this scale is not physically representable by any account, so both
+    // tests fund a dedicated, single-use throwaway signer via
+    // `hardhat_setBalance` rather than any of the shared signers used
+    // elsewhere in this suite. `hardhat_setBalance` mutates network state
+    // that persists for the rest of the whole mocha process (Hardhat's
+    // in-process network is not reset between test files) — using a
+    // fresh, one-off address here, instead of e.g. `owner`, guarantees
+    // this doesn't leave any other test in this suite with an
+    // unexpectedly-altered balance.
+    describe("uint128/uint256 boundary regression (post-hostile-review)", function () {
+      const MAX_UINT128 = (1n << 128n) - 1n;
+      const MAX_UINT256 = ethers.MaxUint256;
+
+      async function fundThrowawaySender(amount: bigint) {
+        const sender = ethers.Wallet.createRandom().connect(ethers.provider);
+        await ethers.provider.send("hardhat_setBalance", [
+          sender.address,
+          "0x" + amount.toString(16),
+        ]);
+        return sender;
+      }
+
+      it("value = type(uint256).max, maxTxValue = type(uint128).max => REVERT (MaxTxValueExceeded)", async function () {
+        // A literal msg.value of exactly type(uint256).max cannot be
+        // dispatched as a real transaction on any EVM node, including
+        // hardhat's — the node internally computes value + (gas price *
+        // gas limit) to check the sender can cover the transaction, and
+        // that addition itself overflows uint256 when value is already
+        // at its ceiling ("overflow payment in transaction"). This is a
+        // node/EVM-level constraint, not a PolicyRegistry/
+        // AgentExecutionGuard one. We use type(uint256).max minus a
+        // small gas headroom instead — still astronomically larger than
+        // any real maxTxValue and well outside uint128 range, so it
+        // exercises the exact same uint256-vs-uint128 comparison at
+        // essentially the same boundary without hitting an unrelated
+        // transaction-dispatch limit.
+        const value = MAX_UINT256 - ethers.parseEther("10");
+
+        const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("boundary-max128-vs-max256")), {
+          maxTxValue: MAX_UINT128,
+          nativeTransferTargets: [recordingTargetAddress],
+        });
+
+        const sender = await fundThrowawaySender(MAX_UINT256);
+
+        const intent: Intent = {
+          agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value,
+          data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
+        };
+        const sig = await signIntent(agent, intent);
+        await expect(
+          guard.connect(sender).execute(
+            intent.agent, intent.wallet, intent.target, intent.value, intent.data,
+            intent.nonce, intent.deadline, intent.policyHash, sig,
+            { value: intent.value }
+          )
+        )
+          .to.be.revertedWithCustomError(guard, "MaxTxValueExceeded")
+          .withArgs(value, res.policyHash);
+      });
+
+      it("value = type(uint128).max, maxTxValue = type(uint128).max (exact boundary) => PASS", async function () {
+        const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("boundary-max128-exact")), {
+          maxTxValue: MAX_UINT128,
+          nativeTransferTargets: [recordingTargetAddress],
+        });
+
+        // fund with a little headroom over the value itself, for gas
+        const sender = await fundThrowawaySender(MAX_UINT128 + ethers.parseEther("1"));
+
+        const intent: Intent = {
+          agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: MAX_UINT128,
+          data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
+        };
+        const sig = await signIntent(agent, intent);
+        await guard.connect(sender).execute(
+          intent.agent, intent.wallet, intent.target, intent.value, intent.data,
+          intent.nonce, intent.deadline, intent.policyHash, sig,
+          { value: intent.value }
+        );
+
+        expect(await guard.nextNonce(agent.address)).to.equal(1n);
+        expect(await ethers.provider.getBalance(recordingTargetAddress)).to.equal(MAX_UINT128);
+        expect(await ethers.provider.getBalance(guardAddress)).to.equal(0n);
+      });
+    });
+
     it("16. msg.value > signed value => REVERT", async function () {
       const intent: Intent = {
         agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: ethers.parseEther("0.5"),
