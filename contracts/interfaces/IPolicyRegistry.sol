@@ -3,15 +3,34 @@ pragma solidity 0.8.24;
 
 /// @title IPolicyRegistry
 /// @notice The only PolicyRegistry surface AgentExecutionGuard depends
-/// on for this remediation gate: resolving which single agent a
-/// `policyHash` was created for, and whether that policy is currently
-/// active. Deliberately does NOT expose `maxTxValue`/target/selector or
-/// spend-limit fields — consulting those for real enforcement is Gate 4
-/// scope, not this remediation.
+/// on. `checkAuthorization` is a single combined view call: it resolves
+/// the policy-agent binding, the policy's active/time-window state, the
+/// maxTxValue check, and the paired (target, selector) — or native-
+/// transfer — authorization check, all in one external call so the
+/// Guard never needs more than one round trip per intent regardless of
+/// how many mandate dimensions Gate 4A/4B eventually add. Deliberately
+/// does NOT expose `dailyLimit`/`approvalThreshold` — accounting against
+/// those remains out of scope (Gate 4B).
 interface IPolicyRegistry {
-    /// @notice Resolve a `policyHash` (as referenced by a signed
-    /// ExecutionIntent) to the single agent it was created for, and
-    /// whether it is currently active. Returns `(address(0), false)` for
-    /// any `policyHash` that does not correspond to a real policy.
-    function resolvePolicyBinding(bytes32 policyHash) external view returns (address agent, bool active);
+    /// @dev Mirrors PolicyRegistry.CallKind. Solidity enums are not
+    /// shared between separate contracts by reference, only by having
+    /// the identical definition in both places — this interface's
+    /// definition and PolicyRegistry's must be kept in exact sync
+    /// (same member order), which contracts-test/PolicyRegistry.test.ts
+    /// and the Gate 4A adversarial suite both verify indirectly by
+    /// exercising every CallKind value end-to-end through both contracts
+    /// together.
+    enum CallKind {
+        NativeTransfer,
+        FunctionCall,
+        Malformed
+    }
+
+    /// @notice Resolve everything AgentExecutionGuard needs to decide
+    /// whether `policyHash` authorizes calling `target` with calldata of
+    /// the given `callKind`/`selector` classification and `value`.
+    function checkAuthorization(bytes32 policyHash, address target, CallKind callKind, bytes4 selector, uint256 value)
+        external
+        view
+        returns (address agent, bool active, bool withinWindow, bool valueAllowed, bool callAllowed);
 }

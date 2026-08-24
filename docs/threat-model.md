@@ -138,3 +138,41 @@ into Gate 4: `maxTxValue`/target/selector enforcement inside
 `AgentExecutionGuard` itself (currently only `PolicyRegistry`'s own view
 function checks these, unconnected to actual execution), `dailyLimit` and
 `approvalThreshold` accounting, and any approval flow.
+
+## Gate 4A status: call authorization
+
+`AgentExecutionGuard` now enforces `maxTxValue` and paired
+`(target, selector)` authorization — see
+`docs/adr/0005-paired-target-selector-authorization.md` and
+`docs/gate-4a-call-authorization.md`. Against the "Required properties"
+list at the top of this document: property 7 (financial limits checked
+deterministically) is now partially satisfied — `maxTxValue` is
+enforced; `dailyLimit` is still not.
+
+**A real vulnerability closed by this gate, not merely a missing
+feature:** Gate 3's independent `allowedTargets`/`allowedSelectors`
+allow-lists authorized their full Cartesian product. A policy owner who
+authorized `(tokenA, transfer)` and `(tokenB, approve)` had, without
+realizing it, also authorized `(tokenA, approve)` and `(tokenB,
+transfer)`. This was a real privilege-escalation bug in the Gate 3
+design, discovered before any deployment and fixed structurally (a
+single paired-key mapping cannot express independent-list semantics at
+all) rather than patched with an additional check.
+
+**A second, related collision found and fixed during this gate's own
+design review** (not by testing a shipped draft — see
+`docs/gate-4a-call-authorization.md` section 8 for the full account):
+an early draft of the calldata-classification logic defaulted
+1–3-byte ("malformed") calldata to `selector = bytes4(0)`, which would
+have meant a policy authorizing the real function selector `0x00000000`
+also silently authorized any malformed short calldata sent to that
+target. Fixed by making `Malformed` a structurally distinct
+classification with no mapping lookup at all, rather than a value that
+could coincide with a real selector.
+
+**Still not enforced, going into Gate 4B:** `dailyLimit` and
+`approvalThreshold` accounting, and any approval flow. **Explicitly out
+of scope, not silently assumed:** argument-level authorization — a
+policy authorizing a function selector on a target says nothing about
+which specific arguments are permitted; only the signed `calldataHash`
+constrains the actual argument bytes used, unchanged since Gate 2.

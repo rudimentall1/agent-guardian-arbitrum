@@ -120,18 +120,6 @@ describe("AgentExecutionGuard", function () {
     await registry.setActive(agentA.address, true);
     await registry.setActive(agentB.address, true);
 
-    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
-    policyRegistry = await MockPolicyRegistry.deploy();
-    await policyRegistry.waitForDeployment();
-    policyRegistryAddress = await policyRegistry.getAddress();
-    await policyRegistry.setBinding(defaultPolicyHashFor(agentA.address), agentA.address, true);
-    await policyRegistry.setBinding(defaultPolicyHashFor(agentB.address), agentB.address, true);
-
-    const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-    guard = await Guard.deploy(registryAddress, policyRegistryAddress);
-    await guard.waitForDeployment();
-    guardAddress = await guard.getAddress();
-
     const Target = await ethers.getContractFactory("RecordingTarget");
     target = await Target.deploy();
     await target.waitForDeployment();
@@ -141,6 +129,28 @@ describe("AgentExecutionGuard", function () {
     reverter = await Reverter.deploy();
     await reverter.waitForDeployment();
     reverterAddress = await reverter.getAddress();
+
+    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
+    policyRegistry = await MockPolicyRegistry.deploy();
+    await policyRegistry.waitForDeployment();
+    policyRegistryAddress = await policyRegistry.getAddress();
+    await policyRegistry.setBinding(defaultPolicyHashFor(agentA.address), agentA.address, true);
+    await policyRegistry.setBinding(defaultPolicyHashFor(agentB.address), agentB.address, true);
+    // Most tests in this file use empty calldata (data: "0x") by default
+    // — a NativeTransfer-kind call. Pre-authorize the two most commonly
+    // used targets so tests that aren't specifically about target/
+    // selector authorization don't each need their own setup. Tests
+    // that ARE about that (Gate 4A) authorize their own targets/
+    // selectors explicitly and don't rely on this default.
+    for (const agent of [agentA, agentB]) {
+      await policyRegistry.authorizeNativeTransfer(defaultPolicyHashFor(agent.address), targetAddress);
+      await policyRegistry.authorizeNativeTransfer(defaultPolicyHashFor(agent.address), reverterAddress);
+    }
+
+    const Guard = await ethers.getContractFactory("AgentExecutionGuard");
+    guard = await Guard.deploy(registryAddress, policyRegistryAddress);
+    await guard.waitForDeployment();
+    guardAddress = await guard.getAddress();
   });
 
   describe("happy path", function () {
@@ -159,6 +169,7 @@ describe("AgentExecutionGuard", function () {
     it("forwards calldata and value exactly as authorized", async function () {
       const data = "0xdeadbeef";
       const value = ethers.parseEther("1");
+      await policyRegistry.authorizeCall(defaultPolicyHashFor(agentA.address), targetAddress, "0xdeadbeef");
       const intent = await baseIntent(agentA.address, walletA.address, 0n, { data, value });
       const sig = await signIntent(agentA, intent);
 
@@ -362,9 +373,15 @@ describe("AgentExecutionGuard", function () {
     });
 
     it("rejects a signed intent with only the calldata changed", async function () {
-      const intent = await baseIntent(agentA.address, walletA.address, 0n, { data: "0x01" });
+      // use real 4-byte selectors (not the 1-byte "malformed" case, which
+      // is unconditionally unauthorized regardless of signature validity
+      // and would test the wrong thing here) so the only reason for
+      // rejection is the signature, not calldata-shape classification.
+      await policyRegistry.authorizeCall(defaultPolicyHashFor(agentA.address), targetAddress, "0x11111111");
+      await policyRegistry.authorizeCall(defaultPolicyHashFor(agentA.address), targetAddress, "0x22222222");
+      const intent = await baseIntent(agentA.address, walletA.address, 0n, { data: "0x11111111" });
       const sig = await signIntent(agentA, intent);
-      const tampered = { ...intent, data: "0x02" };
+      const tampered = { ...intent, data: "0x22222222" };
       await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
     });
 
@@ -426,6 +443,13 @@ describe("AgentExecutionGuard", function () {
       const attacker = await Attacker.deploy();
       await attacker.waitForDeployment();
       await attacker.setGuard(guardAddress);
+      const attackerAddress = await attacker.getAddress();
+      // outer intents in this block target the attacker contract with
+      // empty calldata (NativeTransfer) — authorize it under both
+      // agents' default policies so the reentrancy guard is the only
+      // thing being tested, not an incidental authorization failure.
+      await policyRegistry.authorizeNativeTransfer(defaultPolicyHashFor(agentA.address), attackerAddress);
+      await policyRegistry.authorizeNativeTransfer(defaultPolicyHashFor(agentB.address), attackerAddress);
       return attacker;
     }
 

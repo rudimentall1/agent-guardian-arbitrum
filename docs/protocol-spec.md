@@ -158,3 +158,34 @@ Gate 2 and Gate 3 together rather than in isolation:
 
 See `docs/gate-remediation-msg-value-policy-binding.md` for the full
 report.
+
+## 14. Gate 4A implementation status
+
+`PolicyRegistry` and `AgentExecutionGuard` together now enforce two of
+section 5's financial-mandate dimensions:
+
+1. **`maxTxValue`** — `AgentExecutionGuard.execute` reverts with
+   `MaxTxValueExceeded` if the intent's `value` exceeds the bound
+   policy's `maxTxValue`, checked before nonce consumption.
+2. **Target + selector authorization** — replaced Gate 3's independent
+   `allowedTargets`/`allowedSelectors` lists (which accidentally
+   authorized their full Cartesian product) with a single paired
+   `(target, selector)` authorization primitive, plus a structurally
+   separate native-transfer (`data.length == 0`) authorization
+   dimension. See `docs/adr/0005-paired-target-selector-authorization.md`
+   for the full design rationale and `docs/gate-4a-call-authorization.md`
+   for the report.
+
+**Still not enforced, unchanged from Gate 3:** `dailyLimit` and
+`approvalThreshold` remain declared-only fields — no contract in this
+repository tracks cumulative spend or routes high-value calls through an
+approval flow. That is Gate 4B.
+
+**Explicitly out of scope for Gate 4A, not silently assumed:**
+argument-level authorization. A policy authorizing
+`token.transfer(address,uint256)` on some target authorizes calling that
+function, not any particular recipient or amount — the signed
+`calldataHash` still binds the exact arguments used (unchanged since
+Gate 2), but there is no allow-list over argument *values*. No ERC-20
+accounting of any kind exists; `maxTxValue` concerns native ETH `value`
+only.

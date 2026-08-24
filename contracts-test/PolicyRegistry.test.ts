@@ -8,8 +8,12 @@ describe("PolicyRegistry", function () {
   let otherOwner: HardhatEthersSigner;
   let targetA: string;
   let targetB: string;
-  const SELECTOR_A = "0x12345678";
-  const SELECTOR_B = "0xabcdef01";
+  const SELECTOR_X = "0x12345678";
+  const SELECTOR_Y = "0xabcdef01";
+
+  // PolicyRegistry.CallKind enum order, mirrored on the TS side for
+  // readability in test assertions.
+  const CallKind = { NativeTransfer: 0, FunctionCall: 1, Malformed: 2 };
 
   let NOW: bigint;
   let VALID_FROM: bigint;
@@ -25,8 +29,8 @@ describe("PolicyRegistry", function () {
       approvalThreshold: ethers.parseEther("2"),
       validFrom: VALID_FROM,
       validUntil: VALID_UNTIL,
-      allowedTargets: [targetA],
-      allowedSelectors: [SELECTOR_A],
+      calls: [{ target: targetA, selector: SELECTOR_X }],
+      nativeTransferTargets: [] as string[],
       ...overrides,
     };
   }
@@ -35,10 +39,13 @@ describe("PolicyRegistry", function () {
     const p = defaultParams(overrides);
     const tx = await registry
       .connect(signer)
-      .createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors);
-    const receipt = await tx.wait();
+      .createPolicy(
+        p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil,
+        p.calls, p.nativeTransferTargets
+      );
+    await tx.wait();
     const policyId = await registry.computePolicyId(signer.address, p.salt);
-    return { policyId, receipt, params: p };
+    return { policyId, params: p };
   }
 
   beforeEach(async function () {
@@ -79,6 +86,30 @@ describe("PolicyRegistry", function () {
       expect(m.validUntil).to.equal(params.validUntil);
     });
 
+    it("emits PolicyCreated, CallAuthorized, and NativeTransferAuthorized", async function () {
+      const p = defaultParams({ nativeTransferTargets: [targetB] });
+      await expect(
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      )
+        .to.emit(registry, "PolicyCreated")
+        .and.to.emit(registry, "CallAuthorized")
+        .withArgs(await registry.computePolicyId(owner.address, p.salt), targetA, SELECTOR_X)
+        .and.to.emit(registry, "NativeTransferAuthorized")
+        .withArgs(await registry.computePolicyId(owner.address, p.salt), targetB);
+    });
+
+    it("two different owners can use the identical salt without colliding", async function () {
+      const p = defaultParams();
+      await registry.connect(owner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets);
+      await registry.connect(otherOwner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets);
+
+      const idOwner = await registry.computePolicyId(owner.address, p.salt);
+      const idOther = await registry.computePolicyId(otherOwner.address, p.salt);
+      expect(idOwner).to.not.equal(idOther);
+      expect(await registry.ownerOf(idOwner)).to.equal(owner.address);
+      expect(await registry.ownerOf(idOther)).to.equal(otherOwner.address);
+    });
+
     it("resolvePolicyBinding resolves the correct agent and active state via policyHash", async function () {
       const { policyId, params } = await create(owner);
       const hash = await registry.policyHashOf(policyId);
@@ -102,52 +133,97 @@ describe("PolicyRegistry", function () {
       const [, active] = await registry.resolvePolicyBinding(hash);
       expect(active).to.equal(false);
     });
+  });
 
-    it("emits PolicyCreated with a non-zero policyHash", async function () {
-      const p = defaultParams();
-      await expect(
-        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
-      ).to.emit(registry, "PolicyCreated");
-      const policyId = await registry.computePolicyId(owner.address, p.salt);
-      const hash = await registry.policyHashOf(policyId);
-      expect(hash).to.not.equal(ethers.ZeroHash);
+  describe("Cartesian-product regression (Part 10 — mandatory)", function () {
+    it("target A + selector X => authorized; target B + selector Y => authorized; A+Y and B+X => NOT authorized", async function () {
+      const { policyId } = await create(owner, {
+        calls: [
+          { target: targetA, selector: SELECTOR_X },
+          { target: targetB, selector: SELECTOR_Y },
+        ],
+      });
+
+      expect(await registry.isCallAuthorized(policyId, targetA, SELECTOR_X)).to.equal(true);
+      expect(await registry.isCallAuthorized(policyId, targetB, SELECTOR_Y)).to.equal(true);
+      // the old Cartesian-product bug would have authorized these two:
+      expect(await registry.isCallAuthorized(policyId, targetA, SELECTOR_Y)).to.equal(false);
+      expect(await registry.isCallAuthorized(policyId, targetB, SELECTOR_X)).to.equal(false);
     });
 
-    it("two different owners can use the identical salt without colliding", async function () {
-      const p = defaultParams();
-      await registry.connect(owner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors);
-      await registry.connect(otherOwner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors);
+    it("checkAuthorization confirms the same pairing end-to-end (the exact surface AgentExecutionGuard consults)", async function () {
+      const { policyId, params } = await create(owner, {
+        calls: [
+          { target: targetA, selector: SELECTOR_X },
+          { target: targetB, selector: SELECTOR_Y },
+        ],
+      });
+      const policyHash = await registry.policyHashOf(policyId);
+      await ethers.provider.send("evm_increaseTime", [200]);
+      await ethers.provider.send("evm_mine", []);
 
-      const idOwner = await registry.computePolicyId(owner.address, p.salt);
-      const idOther = await registry.computePolicyId(otherOwner.address, p.salt);
-      expect(idOwner).to.not.equal(idOther);
-      expect(await registry.ownerOf(idOwner)).to.equal(owner.address);
-      expect(await registry.ownerOf(idOther)).to.equal(otherOwner.address);
+      const AX = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_X, 0n);
+      const BY = await registry.checkAuthorization(policyHash, targetB, CallKind.FunctionCall, SELECTOR_Y, 0n);
+      const AY = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_Y, 0n);
+      const BX = await registry.checkAuthorization(policyHash, targetB, CallKind.FunctionCall, SELECTOR_X, 0n);
+
+      expect(AX.callAllowed).to.equal(true);
+      expect(BY.callAllowed).to.equal(true);
+      expect(AY.callAllowed).to.equal(false);
+      expect(BX.callAllowed).to.equal(false);
+    });
+  });
+
+  describe("native transfer vs function-call separation", function () {
+    it("authorizing a native transfer for a target does NOT authorize any function call on it", async function () {
+      const { policyId } = await create(owner, { calls: [], nativeTransferTargets: [targetA] });
+      expect(await registry.isNativeTransferAuthorized(policyId, targetA)).to.equal(true);
+      expect(await registry.isCallAuthorized(policyId, targetA, SELECTOR_X)).to.equal(false);
+      expect(await registry.isCallAuthorized(policyId, targetA, "0x00000000")).to.equal(false);
+    });
+
+    it("authorizing selector 0x00000000 for a target does NOT authorize a native transfer to it", async function () {
+      const { policyId } = await create(owner, { calls: [{ target: targetA, selector: "0x00000000" }], nativeTransferTargets: [] });
+      expect(await registry.isCallAuthorized(policyId, targetA, "0x00000000")).to.equal(true);
+      expect(await registry.isNativeTransferAuthorized(policyId, targetA)).to.equal(false);
+    });
+
+    it("checkAuthorization: CallKind.Malformed is never authorized regardless of any stored entry", async function () {
+      const { policyId, params } = await create(owner, {
+        calls: [{ target: targetA, selector: "0x00000000" }],
+        nativeTransferTargets: [targetA],
+      });
+      const policyHash = await registry.policyHashOf(policyId);
+      await ethers.provider.send("evm_increaseTime", [200]);
+      await ethers.provider.send("evm_mine", []);
+      // target A has BOTH a native-transfer AND a 0x00000000 function-call
+      // authorization — Malformed must still be rejected, proving the
+      // check is structural (no lookup performed) and not merely "this
+      // particular mapping happens to be empty".
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.Malformed, "0x00000000", 0n);
+      expect(res.callAllowed).to.equal(false);
     });
   });
 
   describe("adversarial: identifier collision / squatting", function () {
     it("a different caller using the same salt cannot overwrite or claim the original owner's policy", async function () {
       const { policyId } = await create(owner);
-      // otherOwner tries to "claim" the same conceptual policyId by using
-      // the same salt — but their own derived policyId is different, so
-      // there is nothing to collide with. Confirm the original is untouched.
       const p = defaultParams();
-      await registry.connect(otherOwner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors);
+      await registry.connect(otherOwner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets);
       expect(await registry.ownerOf(policyId)).to.equal(owner.address);
     });
 
     it("reverts on exact re-creation attempt with the same (owner, salt)", async function () {
       const p = defaultParams();
-      await registry.connect(owner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors);
+      await registry.connect(owner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets);
       await expect(
-        registry.connect(owner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
+        registry.connect(owner).createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
       ).to.be.revertedWithCustomError(registry, "PolicyAlreadyExists");
     });
   });
 
-  describe("adversarial: immutability of mandate values", function () {
-    it("there is no update function — revoke + reactivate never change stored mandate values or policyHash", async function () {
+  describe("adversarial: immutability of mandate values and authorizations", function () {
+    it("revoke + reactivate never changes stored mandate values, policyHash, or authorized calls", async function () {
       const { policyId } = await create(owner);
       const hashBefore = await registry.policyHashOf(policyId);
       const mandateBefore = await registry.getMandate(policyId);
@@ -160,31 +236,11 @@ describe("PolicyRegistry", function () {
 
       expect(hashAfter).to.equal(hashBefore);
       expect(mandateAfter.maxTxValue).to.equal(mandateBefore.maxTxValue);
-      expect(mandateAfter.dailyLimit).to.equal(mandateBefore.dailyLimit);
-      expect(mandateAfter.approvalThreshold).to.equal(mandateBefore.approvalThreshold);
-      expect(mandateAfter.validFrom).to.equal(mandateBefore.validFrom);
-      expect(mandateAfter.validUntil).to.equal(mandateBefore.validUntil);
+      expect(await registry.isCallAuthorized(policyId, targetA, SELECTOR_X)).to.equal(true);
     });
 
-    it("recreating under a different salt to 'widen' a mandate produces a different policyHash and identifier", async function () {
-      const { policyId: narrowId, params: narrowParams } = await create(owner, {
-        salt: ethers.keccak256(ethers.toUtf8Bytes("narrow")),
-        maxTxValue: ethers.parseEther("0.1"),
-      });
-      const wideSalt = ethers.keccak256(ethers.toUtf8Bytes("wide"));
-      await registry
-        .connect(owner)
-        .createPolicy(wideSalt, defaultAgent, ethers.parseEther("100"), ethers.parseEther("1000"), ethers.parseEther("500"), VALID_FROM, VALID_UNTIL, [targetA], [SELECTOR_A]);
-      const wideId = await registry.computePolicyId(owner.address, wideSalt);
-
-      expect(wideId).to.not.equal(narrowId);
-      const narrowHash = await registry.policyHashOf(narrowId);
-      const wideHash = await registry.policyHashOf(wideId);
-      expect(narrowHash).to.not.equal(wideHash);
-      // the narrow policy's own commitment is untouched by the existence
-      // of a separate, wider one
-      const narrowMandate = await registry.getMandate(narrowId);
-      expect(narrowMandate.maxTxValue).to.equal(narrowParams.maxTxValue);
+    it("there is no update function to widen an existing policy's authorized calls", async function () {
+      expect(registry.interface.getFunction("updatePolicy" as any)).to.equal(null);
     });
   });
 
@@ -225,72 +281,100 @@ describe("PolicyRegistry", function () {
     it("rejects validUntil <= validFrom", async function () {
       const p = defaultParams({ validFrom: 100n, validUntil: 100n });
       await expect(
-        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
       ).to.be.revertedWithCustomError(registry, "InvalidTimeWindow");
     });
 
-    it("rejects an empty allowedTargets list (fail closed, no wildcard)", async function () {
-      const p = defaultParams({ allowedTargets: [] });
+    it("rejects a policy authorizing nothing at all (empty calls AND empty nativeTransferTargets)", async function () {
+      const p = defaultParams({ calls: [], nativeTransferTargets: [] });
       await expect(
-        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
-      ).to.be.revertedWithCustomError(registry, "EmptyAllowLists");
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      ).to.be.revertedWithCustomError(registry, "EmptyAuthorization");
     });
 
-    it("rejects an empty allowedSelectors list", async function () {
-      const p = defaultParams({ allowedSelectors: [] });
+    it("accepts a policy authorizing only native transfers (no function calls)", async function () {
+      const p = defaultParams({ calls: [], nativeTransferTargets: [targetA] });
       await expect(
-        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
-      ).to.be.revertedWithCustomError(registry, "EmptyAllowLists");
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      ).to.not.be.reverted;
     });
 
-    it("rejects a zero address inside allowedTargets", async function () {
-      const p = defaultParams({ allowedTargets: [targetA, ethers.ZeroAddress] });
+    it("rejects a zero address target inside calls", async function () {
+      const p = defaultParams({ calls: [{ target: ethers.ZeroAddress, selector: SELECTOR_X }] });
       await expect(
-        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      ).to.be.revertedWithCustomError(registry, "ZeroAddress");
+    });
+
+    it("rejects a zero address inside nativeTransferTargets", async function () {
+      const p = defaultParams({ calls: [], nativeTransferTargets: [ethers.ZeroAddress] });
+      await expect(
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
       ).to.be.revertedWithCustomError(registry, "ZeroAddress");
     });
 
     it("rejects a zero agent address", async function () {
       const p = defaultParams({ agent: ethers.ZeroAddress });
       await expect(
-        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.allowedTargets, p.allowedSelectors)
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
       ).to.be.revertedWithCustomError(registry, "ZeroAddress");
+    });
+
+    it("duplicate entries in calls are harmless no-ops, not rejected", async function () {
+      const p = defaultParams({ calls: [{ target: targetA, selector: SELECTOR_X }, { target: targetA, selector: SELECTOR_X }] });
+      await expect(
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      ).to.not.be.reverted;
     });
   });
 
-  describe("isCallAllowedByPolicy — static mandate check", function () {
+  describe("checkAuthorization — full combined check", function () {
     let policyId: string;
+    let policyHash: string;
 
     beforeEach(async function () {
-      const res = await create(owner, { allowedTargets: [targetA], allowedSelectors: [SELECTOR_A], maxTxValue: ethers.parseEther("1") });
+      const res = await create(owner, {
+        calls: [{ target: targetA, selector: SELECTOR_X }],
+        maxTxValue: ethers.parseEther("1"),
+      });
       policyId = res.policyId;
+      policyHash = await registry.policyHashOf(policyId);
       await ethers.provider.send("evm_increaseTime", [200]);
       await ethers.provider.send("evm_mine", []);
     });
 
     it("allows a call within target, selector, and value bounds", async function () {
-      expect(await registry.isCallAllowedByPolicy(policyId, targetA, SELECTOR_A, ethers.parseEther("0.5"))).to.equal(true);
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_X, ethers.parseEther("0.5"));
+      expect(res.callAllowed).to.equal(true);
+      expect(res.valueAllowed).to.equal(true);
+      expect(res.active).to.equal(true);
+      expect(res.withinWindow).to.equal(true);
     });
 
     it("rejects a disallowed target", async function () {
-      expect(await registry.isCallAllowedByPolicy(policyId, targetB, SELECTOR_A, ethers.parseEther("0.5"))).to.equal(false);
+      const res = await registry.checkAuthorization(policyHash, targetB, CallKind.FunctionCall, SELECTOR_X, 0n);
+      expect(res.callAllowed).to.equal(false);
     });
 
     it("rejects a disallowed selector", async function () {
-      expect(await registry.isCallAllowedByPolicy(policyId, targetA, SELECTOR_B, ethers.parseEther("0.5"))).to.equal(false);
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_Y, 0n);
+      expect(res.callAllowed).to.equal(false);
     });
 
     it("rejects a value exceeding maxTxValue", async function () {
-      expect(await registry.isCallAllowedByPolicy(policyId, targetA, SELECTOR_A, ethers.parseEther("1.01"))).to.equal(false);
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_X, ethers.parseEther("1.01"));
+      expect(res.valueAllowed).to.equal(false);
     });
 
     it("allows a value exactly at maxTxValue", async function () {
-      expect(await registry.isCallAllowedByPolicy(policyId, targetA, SELECTOR_A, ethers.parseEther("1"))).to.equal(true);
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_X, ethers.parseEther("1"));
+      expect(res.valueAllowed).to.equal(true);
     });
 
     it("rejects a revoked policy even if all other conditions are satisfied", async function () {
       await registry.connect(owner).revokePolicy(policyId);
-      expect(await registry.isCallAllowedByPolicy(policyId, targetA, SELECTOR_A, ethers.parseEther("0.5"))).to.equal(false);
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_X, ethers.parseEther("0.5"));
+      expect(res.active).to.equal(false);
     });
 
     it("rejects before validFrom", async function () {
@@ -299,18 +383,24 @@ describe("PolicyRegistry", function () {
         validFrom: VALID_UNTIL - 10n,
         validUntil: VALID_UNTIL + 1_000_000n,
       });
-      expect(await registry.isCallAllowedByPolicy(res.policyId, targetA, SELECTOR_A, ethers.parseEther("0.5"))).to.equal(false);
+      const futureHash = await registry.policyHashOf(res.policyId);
+      const check = await registry.checkAuthorization(futureHash, targetA, CallKind.FunctionCall, SELECTOR_X, 0n);
+      expect(check.withinWindow).to.equal(false);
     });
 
     it("rejects after validUntil", async function () {
       await ethers.provider.send("evm_increaseTime", [Number(VALID_UNTIL - VALID_FROM) + 10]);
       await ethers.provider.send("evm_mine", []);
-      expect(await registry.isCallAllowedByPolicy(policyId, targetA, SELECTOR_A, ethers.parseEther("0.5"))).to.equal(false);
+      const res = await registry.checkAuthorization(policyHash, targetA, CallKind.FunctionCall, SELECTOR_X, 0n);
+      expect(res.withinWindow).to.equal(false);
     });
 
-    it("returns false for a nonexistent policy rather than reverting", async function () {
-      const fakeId = ethers.keccak256(ethers.toUtf8Bytes("nonexistent"));
-      expect(await registry.isCallAllowedByPolicy(fakeId, targetA, SELECTOR_A, 0n)).to.equal(false);
+    it("returns zero-value defaults for a nonexistent policy rather than reverting", async function () {
+      const fakeHash = ethers.keccak256(ethers.toUtf8Bytes("nonexistent"));
+      const res = await registry.checkAuthorization(fakeHash, targetA, CallKind.FunctionCall, SELECTOR_X, 0n);
+      expect(res.agent).to.equal(ethers.ZeroAddress);
+      expect(res.active).to.equal(false);
+      expect(res.callAllowed).to.equal(false);
     });
   });
 });

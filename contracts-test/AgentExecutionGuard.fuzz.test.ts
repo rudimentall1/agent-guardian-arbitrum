@@ -46,6 +46,7 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
   let guard: any;
   let guardAddress: string;
   let registry: any;
+  let policyRegistry: any;
   let target: any;
   let targetAddress: string;
   let reverter: any;
@@ -82,15 +83,6 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
     await registry.waitForDeployment();
     await registry.setActive(agent.address, true);
 
-    const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
-    const policyRegistry = await MockPolicyRegistry.deploy();
-    await policyRegistry.waitForDeployment();
-    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
-    guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
-    await guard.waitForDeployment();
-    guardAddress = await guard.getAddress();
-
     const Target = await ethers.getContractFactory("RecordingTarget");
     target = await Target.deploy();
     await target.waitForDeployment();
@@ -100,6 +92,17 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
     reverter = await Reverter.deploy();
     await reverter.waitForDeployment();
     reverterAddress = await reverter.getAddress();
+
+    const Guard = await ethers.getContractFactory("AgentExecutionGuard");
+    const MockPolicyRegistry = await ethers.getContractFactory("MockPolicyRegistry");
+    policyRegistry = await MockPolicyRegistry.deploy();
+    await policyRegistry.waitForDeployment();
+    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
+    await policyRegistry.authorizeNativeTransfer(ZERO_HASH, targetAddress);
+    await policyRegistry.authorizeNativeTransfer(ZERO_HASH, reverterAddress);
+    guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
+    await guard.waitForDeployment();
+    guardAddress = await guard.getAddress();
   });
 
   it(`holds across ${ITERATIONS} randomized nonce attempts (seed 0x${SEED.toString(16)})`, async function () {
@@ -197,11 +200,24 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
     let expectedNonce = 0n;
 
     for (let i = 0; i < 15; i++) {
-      const byteLen = Math.floor(rand() * 64);
+      let byteLen = Math.floor(rand() * 64);
+      // avoid the 1-3 byte "Malformed" calldata-shape band for this
+      // particular test — it exists to test forwarding fidelity of
+      // legitimately authorized calls, not the Malformed-is-never-
+      // authorized rule (which has its own dedicated coverage in
+      // AgentExecutionGuard.gate4a.test.ts). Round up into FunctionCall
+      // range instead of skipping the iteration, to keep exactly 15
+      // real executions.
+      if (byteLen > 0 && byteLen < 4) byteLen = 4;
       const bytes = new Uint8Array(byteLen);
       for (let j = 0; j < byteLen; j++) bytes[j] = Math.floor(rand() * 256);
       const data = ethers.hexlify(bytes);
       const value = ethers.parseEther((rand() * 2).toFixed(6));
+
+      if (data !== "0x") {
+        const selector = ethers.dataSlice(data, 0, 4);
+        await policyRegistry.authorizeCall(ZERO_HASH, targetAddress, selector);
+      }
 
       const d = await domain();
       const sig = await agent.signTypedData(d, types, {

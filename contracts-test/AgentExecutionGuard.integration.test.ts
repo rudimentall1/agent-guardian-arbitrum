@@ -91,15 +91,17 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
     policyRegistry = await MockPolicyRegistry.deploy();
     await policyRegistry.waitForDeployment();
     policyRegistryAddress = await policyRegistry.getAddress();
-    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
-    guard = await Guard.deploy(registryAddress, policyRegistryAddress);
-    await guard.waitForDeployment();
-    guardAddress = await guard.getAddress();
 
     const Target = await ethers.getContractFactory("RecordingTarget");
     target = await Target.deploy();
     await target.waitForDeployment();
     targetAddress = await target.getAddress();
+
+    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
+    await policyRegistry.authorizeNativeTransfer(ZERO_HASH, targetAddress);
+    guard = await Guard.deploy(registryAddress, policyRegistryAddress);
+    await guard.waitForDeployment();
+    guardAddress = await guard.getAddress();
 
     const rd = await registrationDomain();
     const regSig = await agent.signTypedData(rd, registrationTypes, {
