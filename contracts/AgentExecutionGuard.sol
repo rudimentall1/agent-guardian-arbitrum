@@ -8,12 +8,11 @@ import {IAgentRegistry} from "./interfaces/IAgentRegistry.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 
 /// @title AgentExecutionGuard
-/// @notice Gate 2 + remediation gate: the execution-intent and
-/// replay-protection foundation for delegated agent transactions, plus
-/// two fixes to architectural gaps found before Gate 4. This contract
-/// still does NOT implement full financial mandates (maxTxValue,
-/// allowed-target/selector enforcement, daily spend, approval flow) —
-/// those remain Gate 4. What it guarantees, and only this:
+/// @notice Gate 2 + remediation + Gate 4A: the execution-intent,
+/// replay-protection, and call-authorization boundary for delegated
+/// agent transactions. Still does NOT implement daily spend accounting
+/// or an approval flow — those remain Gate 4B. What it guarantees, and
+/// only this:
 ///
 ///   1. An execution intent is authorized only by an EIP-712 signature
 ///      from the exact agent it names, domain-separated by chain id and
@@ -22,42 +21,37 @@ import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 ///      authorize (agent, wallet, target, value, calldata, nonce,
 ///      deadline, policyHash) — none of them can be altered after
 ///      signing without invalidating the signature.
-///   3. Each agent has its own monotonic nonce. Exactly one nonce value
-///      is ever executable for a given agent at a given time: the
-///      current one. Not the previous one (already consumed), not any
-///      future one (out of order execution is not supported by design —
-///      see docs/adr/0002-monotonic-per-agent-nonce.md).
-///   4. Nonce consumption and the intent's external call are atomic: if
-///      the call fails, the entire transaction reverts and the nonce is
-///      NOT consumed, so the same intent can be retried. There is no
-///      state in which an intent both "failed" and "permanently burned
-///      its nonce", and no state in which it both "succeeded" and left
-///      its nonce reusable.
+///   3. Each agent has its own monotonic nonce; exactly one nonce value
+///      is ever executable at a time — see
+///      docs/adr/0002-monotonic-per-agent-nonce.md.
+///   4. Nonce consumption and the intent's external call are atomic —
+///      a failed call reverts the whole transaction, nonce included.
 ///   5. AgentRegistry's live `isActiveAgent` status is checked at
-///      execution time, not at signing time. A signature produced while
-///      an agent was active becomes unusable the instant the agent is
-///      deactivated or its owner transfers it away (which itself forces
-///      inactivity — see AgentRegistry), with no separate revocation
-///      step required here.
-///   6. [Remediation] `msg.value` sent with the transaction MUST equal
-///      the intent's signed `value` field exactly. Before this gate, a
-///      caller could send more or less native currency than the agent
-///      actually authorized; any excess had no withdrawal path and sat
-///      stuck in this contract, later spendable by an unrelated call
-///      whose own declared `value` happened to be covered by that
-///      leftover balance. Now the contract's ETH balance always returns
-///      to exactly 0 after every successful `execute` call.
-///   7. [Remediation] If `policyHash` resolves to a real policy in
-///      `PolicyRegistry`, that policy's recorded agent MUST equal this
-///      intent's `agent`. A `policyHash` created for Agent B can never
-///      be referenced by an intent naming Agent A. See
-///      docs/adr/0004-msg-value-and-policy-agent-binding.md for why
-///      binding alone (without full mandate-content enforcement) is
-///      still meaningfully load-bearing on its own.
+///      execution time, not signing time.
+///   6. [Remediation] `msg.value` MUST equal the intent's signed `value`
+///      field exactly.
+///   7. [Remediation] `policyHash` MUST be bound to this intent's exact
+///      `agent` in PolicyRegistry.
+///   8. [Gate 4A] `value` MUST NOT exceed the bound policy's
+///      `maxTxValue`.
+///   9. [Gate 4A] The intent's `(target, calldata)` MUST be an exactly
+///      authorized (target, selector) pair — or, for empty calldata, an
+///      exactly authorized native-transfer target — under the bound
+///      policy. Calldata is classified into `NativeTransfer`,
+///      `FunctionCall`, or `Malformed` (1–3 bytes: never authorized,
+///      unconditionally) by THIS contract, from the same `data` already
+///      bound into the signed digest — PolicyRegistry never receives an
+///      independently-suppliable target/selector; see
+///      docs/adr/0005-paired-target-selector-authorization.md.
 ///
-/// @dev Explicitly out of scope for this gate (see the remediation
-/// report): maxTxValue/target/selector mandate enforcement, daily spend
-/// accounting, approval flows, and real wallet custody.
+/// @dev Explicitly out of scope: `dailyLimit`/`approvalThreshold`
+/// accounting, an approval flow, and real wallet custody. `target +
+/// selector` authorization is NOT argument-level authorization — a
+/// policy authorizing `token.transfer(address,uint256)` on some target
+/// says nothing about which recipient or amount was passed; the signed
+/// `calldataHash` still cryptographically binds the exact arguments used
+/// (see the ADR, "calldata binding" — argument-level restrictions
+/// remain a possible future gate, not implemented here).
 contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     /// @dev keccak256(
     ///   "ExecutionIntent(address agent,address wallet,address target,uint256 value,bytes32 calldataHash,uint256 nonce,uint256 deadline,bytes32 policyHash)"
@@ -72,8 +66,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
 
     /// @notice Next valid nonce for each agent. Starts at 0. The ONLY
     /// nonce value that will be accepted by `execute` for a given agent
-    /// at any point in time is `nextNonce[agent]` — not lower (already
-    /// consumed), not higher (out of order, unsupported).
+    /// at any point in time is `nextNonce[agent]`.
     mapping(address => uint256) public nextNonce;
 
     event IntentExecuted(
@@ -89,6 +82,9 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     error ValueMismatch(uint256 sent, uint256 signed);
     error PolicyAgentMismatch(bytes32 policyHash, address intentAgent, address boundAgent);
     error PolicyNotActive(bytes32 policyHash);
+    error PolicyOutsideTimeWindow(bytes32 policyHash, uint256 currentTimestamp);
+    error MaxTxValueExceeded(uint256 value, bytes32 policyHash);
+    error CallNotAuthorized(address target, bytes4 selector, bool isNativeTransfer);
 
     constructor(address registry, address policyRegistry) EIP712("AgentExecutionGuard", "1") {
         if (registry == address(0) || policyRegistry == address(0)) revert ZeroAddress();
@@ -97,20 +93,45 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     }
 
     /// @notice Execute a single agent-authorized intent exactly once.
-    /// @dev Ordering is deliberate and load-bearing:
-    ///   deadline check -> value/msg.value match -> agent-active check ->
-    ///   policy-agent binding check -> nonce check -> signature check ->
-    ///   nonce consumption -> external call.
-    /// The value-match and policy-binding checks were added by the
-    /// remediation gate; both are cheap, state-independent checks and
-    /// are placed before signature verification purely to fail fast and
-    /// save gas on malformed calls — they do not weaken the guarantee
-    /// that nothing state-changing happens before the signature is
-    /// verified, since neither check writes any state.
+    /// @dev Final check ordering, and why:
+    ///
+    ///   1. zero-address checks (agent/wallet/target)      — cheapest,
+    ///      pure calldata validation, no reads at all.
+    ///   2. deadline check                                  — cheap,
+    ///      pure arithmetic on already-available block data.
+    ///   3. msg.value == value                               — cheap,
+    ///      pure arithmetic, no reads.
+    ///   4. classify calldata -> (CallKind, selector)         — cheap,
+    ///      pure computation over calldata already present.
+    ///   5. agent-active check (external call: AgentRegistry) — one
+    ///      cold external view call.
+    ///   6. combined policy check (external call: PolicyRegistry) —
+    ///      one cold external view call resolving agent-binding,
+    ///      active/time-window, maxTxValue, and target+selector
+    ///      authorization together, so this remains ONE round trip no
+    ///      matter how many mandate dimensions this function checks.
+    ///   7. nonce check                                       — a
+    ///      single SLOAD against this contract's own storage.
+    ///   8. signature check (ECDSA.recover)                   — the
+    ///      single most expensive operation in this list.
+    ///   9. nonce consumption (SSTORE)                        — the
+    ///      only state write before the external call.
+    ///  10. external call.
+    ///
+    /// Cheapest-first ordering is a deliberate gas-griefing mitigation:
+    /// none of steps 1–8 write any state, so there is no security cost
+    /// to failing fast on a malformed or unauthorized call before paying
+    /// for the most expensive check (signature recovery) — an attacker
+    /// spamming invalid intents pays less gas per rejected attempt than
+    /// they would under a "verify signature first" ordering, and the
+    /// authorization guarantee is identical either way since nothing is
+    /// trusted or mutated until every check has passed. A failed policy,
+    /// maxTxValue, or target/selector check — like every check before
+    /// nonce consumption — never burns a nonce.
+    ///
     /// `nonReentrant` blocks ANY nested call back into `execute` during
-    /// the external call, even one authorized for a different agent or a
-    /// different nonce. A legitimate nested intent must be submitted as
-    /// its own top-level transaction.
+    /// the external call, even one authorized for a different agent or
+    /// nonce.
     function execute(
         address agent,
         address wallet,
@@ -125,11 +146,19 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         if (agent == address(0) || wallet == address(0) || target == address(0)) revert ZeroAddress();
         if (block.timestamp > deadline) revert IntentExpired(deadline, block.timestamp);
         if (msg.value != value) revert ValueMismatch(msg.value, value);
+
+        (IPolicyRegistry.CallKind callKind, bytes4 selector) = classifyCalldata(data);
+
         if (!REGISTRY.isActiveAgent(agent)) revert AgentNotActive(agent);
 
-        (address boundAgent, bool policyActive) = POLICY_REGISTRY.resolvePolicyBinding(policyHash);
+        (address boundAgent, bool policyActive, bool withinWindow, bool valueAllowed, bool callAllowed) =
+            POLICY_REGISTRY.checkAuthorization(policyHash, target, callKind, selector, value);
+
         if (boundAgent != agent) revert PolicyAgentMismatch(policyHash, agent, boundAgent);
         if (!policyActive) revert PolicyNotActive(policyHash);
+        if (!withinWindow) revert PolicyOutsideTimeWindow(policyHash, block.timestamp);
+        if (!valueAllowed) revert MaxTxValueExceeded(value, policyHash);
+        if (!callAllowed) revert CallNotAuthorized(target, selector, callKind == IPolicyRegistry.CallKind.NativeTransfer);
 
         uint256 expected = nextNonce[agent];
         if (nonce != expected) revert InvalidNonce(nonce, expected);
@@ -140,8 +169,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
 
         // Effects before interaction. Reverts on overflow by construction
         // (Solidity 0.8 checked arithmetic) rather than wrapping back to
-        // 0 — see docs/adr/0002-monotonic-per-agent-nonce.md for why a
-        // wraparound here would be a replay bypass, not a UX edge case.
+        // 0 — see docs/adr/0002-monotonic-per-agent-nonce.md.
         nextNonce[agent] = nonce + 1;
 
         (bool success, bytes memory ret) = target.call{value: value}(data);
@@ -149,6 +177,25 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
 
         emit IntentExecuted(agent, wallet, target, nonce, policyHash);
         return ret;
+    }
+
+    /// @notice Classify calldata exactly as PolicyRegistry.CallKind
+    /// expects: empty -> NativeTransfer, >=4 bytes -> FunctionCall (with
+    /// its first 4 bytes as `selector`), 1-3 bytes -> Malformed (whose
+    /// `selector` return value is meaningless and MUST NOT be used —
+    /// PolicyRegistry never performs a mapping lookup for `Malformed`,
+    /// so no caller-observable selector value for this case can ever
+    /// become an authorization bypass regardless of what's returned
+    /// here; it is fixed at `bytes4(0)` purely for a deterministic
+    /// return type).
+    function classifyCalldata(bytes calldata data) public pure returns (IPolicyRegistry.CallKind, bytes4 selector) {
+        if (data.length == 0) {
+            return (IPolicyRegistry.CallKind.NativeTransfer, bytes4(0));
+        }
+        if (data.length >= 4) {
+            return (IPolicyRegistry.CallKind.FunctionCall, bytes4(data[0:4]));
+        }
+        return (IPolicyRegistry.CallKind.Malformed, bytes4(0));
     }
 
     /// @notice Compute the EIP-712 digest for an intent, for off-chain
