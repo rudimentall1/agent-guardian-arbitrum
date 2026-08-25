@@ -236,7 +236,7 @@ contract PolicyRegistry {
         emit PolicyReactivated(policyId, msg.sender);
     }
 
-    /// @notice [Gate 4A] The single combined authorization check
+    /// @notice [P1 fix] The single combined authorization check
     /// `AgentExecutionGuard.execute` uses. Takes a `policyHash` (as
     /// carried in a signed ExecutionIntent), the intent's `target`, a
     /// `callKind`/`selector` pair already classified by the Guard from
@@ -245,6 +245,14 @@ contract PolicyRegistry {
     /// Guard needs to produce a specific, auditable revert reason,
     /// rather than one opaque boolean:
     ///
+    ///   owner        — the policy's immutably-recorded creator
+    ///                  (`msg.sender` at `createPolicy` time). This
+    ///                  contract makes NO claim that `owner` is the
+    ///                  legitimate controller of `agent` — that
+    ///                  relationship is verified LIVE by
+    ///                  AgentExecutionGuard against AgentRegistry on
+    ///                  every call. See
+    ///                  docs/adr/0006-policy-owner-authorization.md.
     ///   agent        — the single agent this policy is bound to.
     ///   active       — the owner-controlled revoke/reactivate bit.
     ///   withinWindow — whether `block.timestamp` is inside
@@ -263,11 +271,12 @@ contract PolicyRegistry {
     function checkAuthorization(bytes32 policyHash, address target, CallKind callKind, bytes4 selector, uint256 value)
         external
         view
-        returns (address agent, bool active, bool withinWindow, bool valueAllowed, bool callAllowed)
+        returns (address owner, address agent, bool active, bool withinWindow, bool valueAllowed, bool callAllowed)
     {
         bytes32 policyId = policyIdOfHash[policyHash];
         Mandate storage m = _mandates[policyId];
 
+        owner = m.owner;
         agent = m.agent;
         active = m.active;
         withinWindow = (block.timestamp >= m.validFrom && block.timestamp <= m.validUntil);

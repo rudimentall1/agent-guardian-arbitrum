@@ -9,4 +9,11 @@ pragma solidity 0.8.24;
 interface IAgentRegistry {
     /// @notice True only if `agent` is registered AND currently active.
     function isActiveAgent(address agent) external view returns (bool);
+
+    /// @notice [P1 fix] The current registered owner/controller of
+    /// `agent`, or `address(0)` if never registered. Checked LIVE at
+    /// execution time against a policy's stored `owner` — see
+    /// docs/adr/0006-policy-owner-authorization.md for why this must be
+    /// a live check, not a creation-time-only one.
+    function ownerOf(address agent) external view returns (address);
 }

@@ -8,7 +8,7 @@ import {IAgentRegistry} from "./interfaces/IAgentRegistry.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 
 /// @title AgentExecutionGuard
-/// @notice Gate 2 + remediation + Gate 4A: the execution-intent,
+/// @notice Gate 2 + remediation + Gate 4A + P1 fix: the execution-intent,
 /// replay-protection, and call-authorization boundary for delegated
 /// agent transactions. Still does NOT implement daily spend accounting
 /// or an approval flow — those remain Gate 4B. What it guarantees, and
@@ -43,6 +43,16 @@ import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 ///      bound into the signed digest — PolicyRegistry never receives an
 ///      independently-suppliable target/selector; see
 ///      docs/adr/0005-paired-target-selector-authorization.md.
+///  10. [P1 fix] A policy's recorded `owner` MUST equal AgentRegistry's
+///      LIVE current owner of the intent's `agent`. `PolicyRegistry.
+///      createPolicy` is permissionless by design (see
+///      docs/adr/0003-immutable-policy-derived-identifier.md) — anyone,
+///      including a compromised or malicious agent's own key, can
+///      create a policy naming any agent and calling themselves its
+///      owner. Binding `policyHash -> agent` alone (point 7) is
+///      therefore NOT sufficient proof that the policy reflects the
+///      legitimate owner's intent — this check closes that gap. See
+///      docs/adr/0006-policy-owner-authorization.md.
 ///
 /// @dev Explicitly out of scope: `dailyLimit`/`approvalThreshold`
 /// accounting, an approval flow, and real wallet custody. `target +
@@ -81,6 +91,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     error ExecutionFailed(bytes returndata);
     error ValueMismatch(uint256 sent, uint256 signed);
     error PolicyAgentMismatch(bytes32 policyHash, address intentAgent, address boundAgent);
+    error PolicyOwnerMismatch(bytes32 policyHash, address registeredOwner, address policyOwner);
     error PolicyNotActive(bytes32 policyHash);
     error PolicyOutsideTimeWindow(bytes32 policyHash, uint256 currentTimestamp);
     error MaxTxValueExceeded(uint256 value, bytes32 policyHash);
@@ -150,11 +161,22 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         (IPolicyRegistry.CallKind callKind, bytes4 selector) = classifyCalldata(data);
 
         if (!REGISTRY.isActiveAgent(agent)) revert AgentNotActive(agent);
+        address registeredOwner = REGISTRY.ownerOf(agent);
 
-        (address boundAgent, bool policyActive, bool withinWindow, bool valueAllowed, bool callAllowed) =
+        (address policyOwner, address boundAgent, bool policyActive, bool withinWindow, bool valueAllowed, bool callAllowed) =
             POLICY_REGISTRY.checkAuthorization(policyHash, target, callKind, selector, value);
 
         if (boundAgent != agent) revert PolicyAgentMismatch(policyHash, agent, boundAgent);
+        // [P1 fix] A policy binding `boundAgent == agent` is not, on its
+        // own, proof that the policy was authorized by whoever legitimately
+        // controls `agent`. `PolicyRegistry.createPolicy` is permissionless
+        // — anyone, including the agent's own key, can create a policy
+        // naming any agent and calling themselves its owner. This check
+        // closes that gap by requiring the policy's recorded owner to
+        // match AgentRegistry's LIVE current owner of `agent`, not a
+        // cached or self-asserted one. See
+        // docs/adr/0006-policy-owner-authorization.md.
+        if (policyOwner != registeredOwner) revert PolicyOwnerMismatch(policyHash, registeredOwner, policyOwner);
         if (!policyActive) revert PolicyNotActive(policyHash);
         if (!withinWindow) revert PolicyOutsideTimeWindow(policyHash, block.timestamp);
         if (!valueAllowed) revert MaxTxValueExceeded(value, policyHash);

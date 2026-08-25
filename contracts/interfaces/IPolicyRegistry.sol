@@ -29,8 +29,13 @@ interface IPolicyRegistry {
     /// @notice Resolve everything AgentExecutionGuard needs to decide
     /// whether `policyHash` authorizes calling `target` with calldata of
     /// the given `callKind`/`selector` classification and `value`.
+    /// `owner` is the policy's immutably-recorded creator — [P1 fix]
+    /// AgentExecutionGuard checks this LIVE against
+    /// `IAgentRegistry.ownerOf(intent.agent)` on every call; it is never
+    /// trusted on its own. See
+    /// docs/adr/0006-policy-owner-authorization.md.
     function checkAuthorization(bytes32 policyHash, address target, CallKind callKind, bytes4 selector, uint256 value)
         external
         view
-        returns (address agent, bool active, bool withinWindow, bool valueAllowed, bool callAllowed);
+        returns (address owner, address agent, bool active, bool withinWindow, bool valueAllowed, bool callAllowed);
 }
