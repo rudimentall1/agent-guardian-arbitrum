@@ -189,3 +189,19 @@ function, not any particular recipient or amount — the signed
 Gate 2), but there is no allow-list over argument *values*. No ERC-20
 accounting of any kind exists; `maxTxValue` concerns native ETH `value`
 only.
+
+## 15. P1 fix: policy-owner authorization
+
+`policyHash -> agent` binding (section 14 / remediation gate) proves a
+policy is *for* a given agent, not that the policy's *content* was
+authorized by that agent's actual controller. `PolicyRegistry.
+createPolicy` is, and remains, permissionless — anyone, including a
+compromised or malicious agent's own key, can create a policy naming any
+agent. `AgentExecutionGuard.execute` now additionally requires the
+policy's recorded `owner` to equal `AgentRegistry.ownerOf(intent.agent)`,
+checked live on every call — closing a confirmed exploit where an agent
+could grant itself unlimited authority using only its own
+already-possessed signing key. See
+`docs/adr/0006-policy-owner-authorization.md` for the full analysis,
+including why this must be a live check (ownership-transfer semantics)
+rather than one performed only at policy-creation time.

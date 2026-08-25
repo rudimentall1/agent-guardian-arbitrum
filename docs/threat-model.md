@@ -176,3 +176,38 @@ of scope, not silently assumed:** argument-level authorization — a
 policy authorizing a function selector on a target says nothing about
 which specific arguments are permitted; only the signed `calldataHash`
 constrains the actual argument bytes used, unchanged since Gate 2.
+
+## P1: policy-owner authorization (Critical, confirmed exploitable, fixed)
+
+**A real, confirmed vulnerability**, not a design limitation: Gate 4A
+established `policyHash -> agent` binding but never verified that the
+policy was authorized by the legitimate owner/controller of that agent.
+`PolicyRegistry.createPolicy` is permissionless — a malicious or
+compromised agent could call it directly, using only its own
+already-possessed signing key, name itself as both `owner` and `agent`,
+grant itself an arbitrarily permissive mandate, and sign a valid
+`ExecutionIntent` referencing that self-created policy instead of
+whatever restrictive policy its legitimate owner actually created. Every
+prior check (`isActiveAgent`, `PolicyAgentMismatch`, `PolicyNotActive`,
+`withinWindow`, `valueAllowed`, `callAllowed`, nonce, signature) was
+satisfiable this way — none of them asked *who* created the policy.
+
+**Confirmed exploitable** by a real adversarial test against the actual
+(non-mocked) `AgentRegistry` + `PolicyRegistry` + `AgentExecutionGuard`
+stack before the fix — see `contracts-test/
+P1PolicyOwnerAuthorization.poc.test.ts` and
+`docs/adr/0006-policy-owner-authorization.md` for the full account.
+
+**Fixed**: `AgentExecutionGuard.execute` now additionally requires the
+policy's recorded `owner` to equal `AgentRegistry.ownerOf(intent.agent)`,
+checked live, not cached from policy-creation time. `PolicyRegistry`
+itself is unchanged — creation remains permissionless by design (see the
+ADR for why permissioning creation would be strictly weaker than this
+live check). New trust boundary made explicit: after an agent's
+ownership transfers, ALL policies created under the old owner become
+permanently unusable — including after the new owner reactivates the
+agent — until the new owner creates their own policy. This is a
+deliberate consequence of policy immutability (ADR-0003) combined with
+live ownership verification, not an oversight, and mirrors the same
+"stale authorization must not survive an ownership change" principle
+already applied to agent activity.
