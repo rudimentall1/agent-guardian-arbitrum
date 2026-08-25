@@ -7,16 +7,34 @@ import {IAgentRegistry} from "../interfaces/IAgentRegistry.sol";
 /// directly instead of going through the real AgentRegistry's
 /// EIP-712-signed registration flow, which is orthogonal to what Gate 2
 /// is testing. `contracts-test/AgentExecutionGuard.integration.test.ts`
-/// covers the real AgentRegistry wiring separately. Not part of any
-/// deployment.
+/// and `contracts-test/P1PolicyOwnerAuthorization.poc.test.ts` cover the
+/// real AgentRegistry wiring separately. Not part of any deployment.
 contract MockAgentRegistry is IAgentRegistry {
     mapping(address => bool) private _active;
+    /// @dev Defaults to `agent` itself (set implicitly the first time
+    /// `setActive` is called for that address) unless explicitly
+    /// overridden via `setOwner` — matches
+    /// `MockPolicyRegistry.setBinding`'s own "owner == agent" default,
+    /// so tests that don't care about the P1 owner-authorization check
+    /// get a matching pair without needing to think about it.
+    mapping(address => address) private _owner;
 
     function setActive(address agent, bool active_) external {
         _active[agent] = active_;
+        if (_owner[agent] == address(0)) {
+            _owner[agent] = agent;
+        }
+    }
+
+    function setOwner(address agent, address owner_) external {
+        _owner[agent] = owner_;
     }
 
     function isActiveAgent(address agent) external view returns (bool) {
         return _active[agent];
+    }
+
+    function ownerOf(address agent) external view returns (address) {
+        return _owner[agent];
     }
 }
