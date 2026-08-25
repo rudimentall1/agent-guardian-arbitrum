@@ -57,7 +57,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
     return { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress };
   }
 
-  async function signIntent(nonce: bigint, deadline = FAR_DEADLINE) {
+  async function signIntent(nonce: bigint, deadline = FAR_DEADLINE, policyHash = ZERO_HASH) {
     const d = await intentDomain();
     const calldataHash = ethers.keccak256("0x");
     return agent.signTypedData(d, intentTypes, {
@@ -68,7 +68,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
       calldataHash,
       nonce,
       deadline,
-      policyHash: ZERO_HASH,
+      policyHash,
     });
   }
 
@@ -97,7 +97,13 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
     await target.waitForDeployment();
     targetAddress = await target.getAddress();
 
-    await policyRegistry.setBinding(ZERO_HASH, agent.address, true);
+    // owner=owner.address matches the REAL AgentRegistry's registered
+    // owner for `agent` (this file registers agent under `owner` a few
+    // lines below) — using the 3-arg setBinding convenience default
+    // (owner==agent) would not match, since this file exercises the
+    // real registry's actual owner/agent distinction, not the mock's
+    // simplifying default.
+    await policyRegistry.setFullBinding(ZERO_HASH, owner.address, agent.address, true, true, ethers.MaxUint256);
     await policyRegistry.authorizeNativeTransfer(ZERO_HASH, targetAddress);
     guard = await Guard.deploy(registryAddress, policyRegistryAddress);
     await guard.waitForDeployment();
@@ -158,20 +164,49 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
       ).to.be.revertedWithCustomError(guard, "AgentNotActive");
     });
 
-    it("the SAME signature becomes valid again once the new owner reactivates — the agent key itself never changed", async function () {
+    it("the OLD policy (bound to the old owner) remains permanently unusable even after the new owner reactivates the agent — this is the correct, intended P1 consequence", async function () {
       const sig = await signIntent(0n);
       await registry.connect(owner).transferAgentOwnership(agent.address, newOwner.address);
       await registry.connect(newOwner).reactivate(agent.address);
 
-      // documented, not silently assumed: reactivation does not require
-      // (and Gate 1 has no mechanism for) rotating the agent's signing
-      // key, so the original operator's signature is honored again under
-      // the NEW owner's authority. This is an explicit trust boundary:
-      // transferring ownership without also rotating the agent key means
-      // whoever held that key before the transfer can still author valid
-      // intents after it, as long as the new owner reactivates without
-      // re-registering under a fresh key.
-      await guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig);
+      // [P1 fix] The mock policy binding set up in beforeEach still
+      // records `owner: owner.address` (the ORIGINAL owner) — that
+      // binding is immutable in the real PolicyRegistry (see ADR-0003),
+      // and AgentRegistry.ownerOf(agent) now live-reports `newOwner`.
+      // The agent's signing key never changed and the signature is
+      // still cryptographically valid, but the POLICY it references was
+      // never authorized by the current owner — this must fail, by
+      // design, exactly the same way a stale AgentRegistry activity
+      // check would. Reactivating the AGENT does not, and must not,
+      // resurrect a policy that belongs to a since-departed owner.
+      await expect(
+        guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
+      ).to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch").withArgs(ZERO_HASH, newOwner.address, owner.address);
+    });
+
+    it("the agent's signing key itself is unaffected by ownership transfer — a policy the NEW owner establishes works immediately with the SAME key", async function () {
+      const sig = await signIntent(0n);
+      await registry.connect(owner).transferAgentOwnership(agent.address, newOwner.address);
+      await registry.connect(newOwner).reactivate(agent.address);
+
+      // old policy: still correctly dead (see previous test)
+      await expect(
+        guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
+      ).to.be.reverted;
+
+      // the new owner establishes their OWN policy for the same agent
+      // (in real PolicyRegistry this is a fresh createPolicy call under
+      // `newOwner`; the mock models the same fact directly) — no agent
+      // re-registration, no new signing key, nothing about the agent
+      // itself changes.
+      const newPolicyHash = ethers.keccak256(ethers.toUtf8Bytes("new-owner-policy"));
+      await policyRegistry.setFullBinding(newPolicyHash, newOwner.address, agent.address, true, true, ethers.MaxUint256);
+      await policyRegistry.authorizeNativeTransfer(newPolicyHash, targetAddress);
+
+      // the SAME agent key signs a new intent referencing the new
+      // policy — succeeds immediately.
+      const newSig = await signIntent(0n, FAR_DEADLINE, newPolicyHash);
+      await guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, newPolicyHash, newSig);
       expect(await guard.nextNonce(agent.address)).to.equal(1n);
     });
 
@@ -182,6 +217,11 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
 
       await registry.connect(owner).transferAgentOwnership(agent.address, newOwner.address);
       await registry.connect(newOwner).reactivate(agent.address);
+      // [P1 fix] update the mock policy binding to the new owner so this
+      // test continues to isolate nonce behavior specifically, rather
+      // than being masked by the (separately, and correctly) unrelated
+      // PolicyOwnerMismatch that the two tests above cover on their own.
+      await policyRegistry.setFullBinding(ZERO_HASH, newOwner.address, agent.address, true, true, ethers.MaxUint256);
 
       // nonce continues from 2, not reset to 0
       await expect(execute(0n)).to.be.revertedWithCustomError(guard, "InvalidNonce").withArgs(0n, 2n);
