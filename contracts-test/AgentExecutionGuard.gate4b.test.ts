@@ -77,7 +77,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     targetAddressForPolicy = targetAddress,
     maxTxValue = ethers.parseEther("100")
   ) {
-    const salt = ethers.keccak256(ethers.toUtf8Bytes(`${dailyLimit}-${approvalThreshold}-${targetAddressForPolicy}-${Math.random()}`));
+    const salt = ethers.keccak256(ethers.toUtf8Bytes(`${dailyLimit}-${approvalThreshold}-${targetAddressForPolicy}-${Date.now()}-${Math.random()}`));
     await policyRegistry.connect(owner).createPolicy(
       salt,
       agent.address,
@@ -132,37 +132,13 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
 
   async function execute(policyHash: string, value: bigint, nonce: bigint, targetForCall = targetAddress, data = "0x") {
     const sig = await signIntent(policyHash, value, nonce, targetForCall, data);
-    return guard.execute(
-      agent.address,
-      wallet.address,
-      targetForCall,
-      value,
-      data,
-      nonce,
-      FAR_DEADLINE,
-      policyHash,
-      sig,
-      { value }
-    );
+    return guard.execute(agent.address, wallet.address, targetForCall, value, data, nonce, FAR_DEADLINE, policyHash, sig, { value });
   }
 
   async function executeWithApproval(policyHash: string, value: bigint, nonce: bigint, approvalDeadline: bigint, targetForCall = targetAddress, data = "0x") {
     const sig = await signIntent(policyHash, value, nonce, targetForCall, data);
     const approval = await signApproval(policyHash, value, nonce, approvalDeadline, targetForCall, data);
-    return guard.executeWithApproval(
-      agent.address,
-      wallet.address,
-      targetForCall,
-      value,
-      data,
-      nonce,
-      FAR_DEADLINE,
-      policyHash,
-      sig,
-      approvalDeadline,
-      approval,
-      { value }
-    );
+    return guard.executeWithApproval(agent.address, wallet.address, targetForCall, value, data, nonce, FAR_DEADLINE, policyHash, sig, approvalDeadline, approval, { value });
   }
 
   beforeEach(async function () {
@@ -201,10 +177,10 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       expect((await guard.dailySpend(policy)).spent).to.equal(limit);
     });
 
-    it("rejects dailyLimit + 1 wei", async function () {
+    it("rejects dailyLimit + 1 wei through the daily ledger", async function () {
       const limit = ethers.parseEther("1");
       const policy = await createPolicy(limit, ethers.MaxUint128);
-      await expect(execute(policy, limit + 1n, 0n)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
+      await expect(execute(policy, limit + 1n, 0n)).to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
     });
 
     it("allows two spends whose sum exactly equals the limit", async function () {
@@ -219,8 +195,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const limit = ethers.parseEther("1");
       const policy = await createPolicy(limit, ethers.MaxUint128);
       await execute(policy, ethers.parseEther("0.7"), 0n);
-      await expect(execute(policy, ethers.parseEther("0.300000000000000001"), 1n))
-        .to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
+      await expect(execute(policy, ethers.parseEther("0.300000000000000001"), 1n)).to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
     });
 
     it("shares one ledger across wallets and relayers because the key is policyHash", async function () {
@@ -229,18 +204,16 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await execute(policy, ethers.parseEther("0.8"), 0n);
       expect((await guard.dailySpend(policy)).spent).to.equal(ethers.parseEther("0.8"));
       const second = await signIntent(policy, ethers.parseEther("0.3"), 1n);
-      await expect(
-        guard.connect(wallet).execute(agent.address, owner.address, targetAddress, ethers.parseEther("0.3"), "0x", 1n, FAR_DEADLINE, policy, second, { value: ethers.parseEther("0.3") })
-      ).to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
+      await expect(guard.connect(wallet).execute(agent.address, owner.address, targetAddress, ethers.parseEther("0.3"), "0x", 1n, FAR_DEADLINE, policy, second, { value: ethers.parseEther("0.3") }))
+        .to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
     });
 
     it("does not consume daily allowance when the external call reverts", async function () {
       const limit = ethers.parseEther("1");
       const policy = await createPolicy(limit, ethers.MaxUint128, reverterAddress);
       const sig = await signIntent(policy, ethers.parseEther("0.5"), 0n, reverterAddress);
-      await expect(
-        guard.execute(agent.address, wallet.address, reverterAddress, ethers.parseEther("0.5"), "0x", 0n, FAR_DEADLINE, policy, sig, { value: ethers.parseEther("0.5") })
-      ).to.be.revertedWithCustomError(guard, "ExecutionFailed");
+      await expect(guard.execute(agent.address, wallet.address, reverterAddress, ethers.parseEther("0.5"), "0x", 0n, FAR_DEADLINE, policy, sig, { value: ethers.parseEther("0.5") }))
+        .to.be.revertedWithCustomError(guard, "ExecutionFailed");
       expect((await guard.dailySpend(policy)).spent).to.equal(0n);
       expect(await guard.nextNonce(agent.address)).to.equal(0n);
     });
@@ -266,10 +239,11 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await ethers.provider.send("evm_setNextBlockTimestamp", [Number(nextDay + 1n)]);
       await execute(policy, limit, 1n);
       expect((await guard.dailySpend(policy)).spent).to.equal(limit);
-      expect((await guard.dailySpend(policy)).day).to.equal(nextDay / 86400n + 0n);
+      expect((await guard.dailySpend(policy)).day).to.equal(nextDay / 86400n);
     });
 
     it("handles the maximum uint128 daily limit at the exact representable boundary", async function () {
+      await ethers.provider.send("hardhat_setBalance", [owner.address, ethers.toBeHex(ethers.MaxUint256)]);
       const policy = await createPolicy(ethers.MaxUint128, ethers.MaxUint128, targetAddress, ethers.MaxUint128);
       await execute(policy, ethers.MaxUint128, 0n);
       expect((await guard.dailySpend(policy)).spent).to.equal(ethers.MaxUint128);
@@ -303,9 +277,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const policy = await createPolicy(ethers.parseEther("10"), 0n);
       const approval = await signApproval(policy, 1n, 0n, FAR_DEADLINE);
       const intent = await signIntent(policy, 1n, 1n);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 1n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 1n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
     });
 
     it("rejects an approval replayed with different calldata", async function () {
@@ -313,30 +286,21 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const approval = await signApproval(policy, 1n, 0n, FAR_DEADLINE, targetAddress, "0x");
       const data = "0xdeadbeef";
       const intent = await signIntent(policy, 1n, 0n, targetAddress, data);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, data, 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, data, 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
     });
 
     it("rejects an approval signed by a non-owner", async function () {
       const policy = await createPolicy(ethers.parseEther("10"), 0n);
       const attacker = ethers.Wallet.createRandom().connect(ethers.provider);
-      const domain = await guardDomain();
-      const approval = await attacker.signTypedData(domain, approvalTypes, {
-        agent: agent.address,
-        wallet: wallet.address,
-        target: targetAddress,
-        value: 1n,
-        calldataHash: ethers.keccak256("0x"),
-        nonce: 0n,
-        deadline: FAR_DEADLINE,
-        policyHash: policy,
-        approvalDeadline: FAR_DEADLINE,
+      const approval = await attacker.signTypedData(await guardDomain(), approvalTypes, {
+        agent: agent.address, wallet: wallet.address, target: targetAddress, value: 1n,
+        calldataHash: ethers.keccak256("0x"), nonce: 0n, deadline: FAR_DEADLINE,
+        policyHash: policy, approvalDeadline: FAR_DEADLINE,
       });
       const intent = await signIntent(policy, 1n, 0n);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
     });
 
     it("rejects approvalDeadline after intent deadline", async function () {
@@ -345,9 +309,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const approvalDeadline = intentDeadline + 1n;
       const intent = await signIntent(policy, 1n, 0n, targetAddress, "0x", intentDeadline);
       const approval = await signApproval(policy, 1n, 0n, approvalDeadline, targetAddress, "0x", intentDeadline);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, intentDeadline, policy, intent, approvalDeadline, approval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "ApprovalDeadlineAfterIntent");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, intentDeadline, policy, intent, approvalDeadline, approval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "ApprovalDeadlineAfterIntent");
     });
 
     it("expired approval cannot authorize execution", async function () {
@@ -358,9 +321,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const intent = await signIntent(policy, 1n, 0n, targetAddress, "0x", intentDeadline);
       const approval = await signApproval(policy, 1n, 0n, approvalDeadline, targetAddress, "0x", intentDeadline);
       await ethers.provider.send("evm_setNextBlockTimestamp", [block + 11]);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, intentDeadline, policy, intent, approvalDeadline, approval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "ApprovalExpired");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, intentDeadline, policy, intent, approvalDeadline, approval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "ApprovalExpired");
     });
 
     it("approval cannot bypass maxTxValue", async function () {
@@ -368,9 +330,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const value = 2n;
       const intent = await signIntent(policy, value, 0n);
       const approval = await signApproval(policy, value, 0n, FAR_DEADLINE);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, value, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value })
-      ).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, value, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value }))
+        .to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
     });
 
     it("approval cannot bypass the daily limit", async function () {
@@ -378,28 +339,20 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await executeWithApproval(policy, 1n, 0n, FAR_DEADLINE);
       const intent = await signIntent(policy, 1n, 1n);
       const approval = await signApproval(policy, 1n, 1n, FAR_DEADLINE);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 1n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 1n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
     });
 
-    it("failed approval and signature checks do not mutate spend or nonce", async function () {
+    it("failed approval checks do not mutate spend or nonce", async function () {
       const policy = await createPolicy(ethers.parseEther("10"), 0n);
       const badApproval = await owner.signTypedData(await guardDomain(), approvalTypes, {
-        agent: agent.address,
-        wallet: wallet.address,
-        target: targetAddress,
-        value: 1n,
-        calldataHash: ethers.keccak256("0x"),
-        nonce: 0n,
-        deadline: FAR_DEADLINE,
-        policyHash: ethers.keccak256(ethers.toUtf8Bytes("wrong")),
-        approvalDeadline: FAR_DEADLINE,
+        agent: agent.address, wallet: wallet.address, target: targetAddress, value: 1n,
+        calldataHash: ethers.keccak256("0x"), nonce: 0n, deadline: FAR_DEADLINE,
+        policyHash: ethers.keccak256(ethers.toUtf8Bytes("wrong")), approvalDeadline: FAR_DEADLINE,
       });
       const intent = await signIntent(policy, 1n, 0n);
-      await expect(
-        guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, badApproval, { value: 1n })
-      ).to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, badApproval, { value: 1n }))
+        .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
       expect((await guard.dailySpend(policy)).spent).to.equal(0n);
       expect(await guard.nextNonce(agent.address)).to.equal(0n);
     });
