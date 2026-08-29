@@ -7,6 +7,8 @@
     "doc": "docs"
   },
   "scripts": {
+    "compile": "hardhat clean && hardhat compile",
+    "test:hardhat": "hardhat test",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
