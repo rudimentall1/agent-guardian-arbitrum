@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Security infrastructure for autonomous financial agents on Arbitrum and Robinhood Chain.",
   "main": "index.js",
-  "directories": { "doc": "docs" },
+  "directories": {
+    "doc": "docs"
+  },
   "scripts": {
     "test": "hardhat test",
     "compile": "hardhat compile"
@@ -15,7 +17,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "bugs": { "url": "https://github.com/rudimentall1/agent-guardian-arbitrum/issues" },
+  "bugs": {
+    "url": "https://github.com/rudimentall1/agent-guardian-arbitrum/issues"
+  },
   "homepage": "https://github.com/rudimentall1/agent-guardian-arbitrum#readme",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

@@ -244,7 +244,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
 
     it("handles the maximum uint128 daily limit at the exact representable boundary", async function () {
       await ethers.provider.send("hardhat_setBalance", [owner.address, ethers.toBeHex(ethers.MaxUint256)]);
-      const policy = await createPolicy(ethers.MaxUint128, ethers.MaxUint128, targetAddress, ethers.MaxUint128);
+      const policy = await createPolicy(ethers.MaxUint128, ethers.MaxUint128, targetAddress);
       await execute(policy, ethers.MaxUint128, 0n);
       expect((await guard.dailySpend(policy)).spent).to.equal(ethers.MaxUint128);
     });
@@ -358,3 +358,5 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     });
   });
 });
+
+

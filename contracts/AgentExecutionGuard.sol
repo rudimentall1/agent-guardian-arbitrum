@@ -80,7 +80,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         bytes32 policyHash,
         bytes calldata signature
     ) external payable nonReentrant returns (bytes memory returndata) {
-        return _execute(agent, wallet, target, value, data, nonce, deadline, policyHash, signature, 0, "");
+        return _execute(agent, wallet, target, value, data, nonce, deadline, policyHash, signature, 0, hex"");
     }
 
     /// @notice Execute an intent together with a current-owner approval when
@@ -96,7 +96,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         bytes32 policyHash,
         bytes calldata signature,
         uint256 approvalDeadline,
-        bytes calldata approvalSignature
+        bytes memory approvalSignature
     ) external payable nonReentrant returns (bytes memory returndata) {
         return _execute(
             agent,
@@ -124,7 +124,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         bytes32 policyHash,
         bytes calldata signature,
         uint256 approvalDeadline,
-        bytes calldata approvalSignature
+        bytes memory approvalSignature
     ) internal returns (bytes memory returndata) {
         if (agent == address(0) || wallet == address(0) || target == address(0)) revert ZeroAddress();
         if (block.timestamp > deadline) revert IntentExpired(deadline, block.timestamp);
@@ -252,3 +252,8 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         return _hashTypedDataV4(structHash);
     }
 }
+
+
+
+
+
