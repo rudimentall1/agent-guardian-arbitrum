@@ -77,7 +77,7 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       salt,
       forAgent,
       opts.maxTxValue ?? ethers.parseEther("1"),
-      ethers.parseEther("100"),
+      ethers.MaxUint128,
       ethers.parseEther("50"),
       opts.validFrom ?? 0n,
       opts.validUntil ?? FAR_DEADLINE,

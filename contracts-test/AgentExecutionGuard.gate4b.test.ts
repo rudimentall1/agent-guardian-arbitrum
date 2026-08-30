@@ -275,19 +275,24 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
 
     it("rejects an approval signed for a different nonce", async function () {
       const policy = await createPolicy(ethers.parseEther("10"), 0n);
-      const approval = await signApproval(policy, 1n, 0n, FAR_DEADLINE);
-      const intent = await signIntent(policy, 1n, 1n);
-      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 1n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
+      // The intent itself stays at the current nonce. Only the owner approval
+      // is intentionally signed for a different nonce, so execution reaches
+      // approval verification instead of failing early on InvalidNonce.
+      const approval = await signApproval(policy, 1n, 1n, FAR_DEADLINE);
+      const intent = await signIntent(policy, 1n, 0n);
+      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, "0x", 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
         .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
     });
 
-    it("rejects an approval replayed with different calldata", async function () {
+    it("rejects an approval replayed with a different approvalDeadline", async function () {
       const policy = await createPolicy(ethers.parseEther("10"), 0n);
-      const approval = await signApproval(policy, 1n, 0n, FAR_DEADLINE, targetAddress, "0x");
-      const data = "0xdeadbeef";
-      const intent = await signIntent(policy, 1n, 0n, targetAddress, data);
-      await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, 1n, data, 0n, FAR_DEADLINE, policy, intent, FAR_DEADLINE, approval, { value: 1n }))
-        .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
+      const signedApprovalDeadline = FAR_DEADLINE - 1n;
+      const approval = await signApproval(policy, 1n, 0n, signedApprovalDeadline);
+      const intent = await signIntent(policy, 1n, 0n, targetAddress, "0x");
+      await expect(guard.executeWithApproval(
+        agent.address, wallet.address, targetAddress, 1n, "0x", 0n, FAR_DEADLINE, policy, intent,
+        FAR_DEADLINE, approval, { value: 1n }
+      )).to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
     });
 
     it("rejects an approval signed by a non-owner", async function () {
