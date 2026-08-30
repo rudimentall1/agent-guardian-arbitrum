@@ -29,8 +29,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
   async function createPolicy(dailyLimit: bigint, approvalThreshold: bigint, maxTxValue = ethers.parseEther("100")) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(`${dailyLimit}-${approvalThreshold}-${maxTxValue}-${Date.now()}-${Math.random()}`));
     const payload = coder.encode(
-      ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address,bytes4)[]","address[]"],
-      [salt, agentAddress, maxTxValue, dailyLimit, approvalThreshold, 0n, DEADLINE, [[targetAddress, ZERO_SELECTOR]], [targetAddress]]
+      ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"],
+      [salt, agentAddress, maxTxValue, dailyLimit, approvalThreshold, 0n, DEADLINE, [{target: targetAddress, selector: ZERO_SELECTOR}], [targetAddress]]
     );
     await owner.sendTransaction({ to: await policyRegistry.getAddress(), data: ethers.concat([CREATE_POLICY_SELECTOR, payload]) });
     return policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address, salt));
@@ -102,8 +102,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await reverter.waitForDeployment();
       const ra = await reverter.getAddress();
       const salt = ethers.keccak256(ethers.toUtf8Bytes("reverter"));
-      const payload = coder.encode(["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address,bytes4)[]","address[]"],
-        [salt,agentAddress,ethers.parseEther("1"),ethers.parseEther("1"),ethers.MaxUint128,0n,DEADLINE,[[ra,ZERO_SELECTOR]],[ra]]);
+      const payload = coder.encode(["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"],
+        [salt,agentAddress,ethers.parseEther("1"),ethers.parseEther("1"),ethers.MaxUint128,0n,DEADLINE,[{target:ra,selector:ZERO_SELECTOR}],[ra]]);
       await owner.sendTransaction({to: await policyRegistry.getAddress(), data: ethers.concat([CREATE_POLICY_SELECTOR,payload])});
       const policy = await policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address,salt));
       const net = await ethers.provider.getNetwork();
@@ -138,6 +138,12 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const intent = await signIntent(policy, 1n, 0n);
       await expect(guard.executeWithApproval(agentAddress,wallet.address,targetAddress,1n,"0x",0n,DEADLINE,policy,intent,DEADLINE,approval,{value:1n})).to.be.revertedWithCustomError(guard,"InvalidApprovalSignature");
     });
+    it("rejects an approval replayed with altered calldata", async function () {
+      const policy = await createPolicy(ethers.parseEther("10"), 0n);
+      const approval = await signApproval(policy, 1n, 0n, DEADLINE);
+      const intent = await signIntent(policy, 1n, 0n);
+      await expect(guard.executeWithApproval(agentAddress,wallet.address,targetAddress,1n,"0x1234",0n,DEADLINE,policy,intent,DEADLINE,approval,{value:1n})).to.be.revertedWithCustomError(guard,"InvalidIntentSignature");
+    });
     it("rejects approval signed by a non-owner", async function () {
       const policy = await createPolicy(ethers.parseEther("10"), 0n);
       const attacker = ethers.Wallet.createRandom().connect(ethers.provider);
@@ -165,11 +171,13 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await ethers.provider.send("evm_setNextBlockTimestamp", [block + 11]);
       await expect(guard.executeWithApproval(agentAddress,wallet.address,targetAddress,1n,"0x",0n,intentDeadline,policy,intent,approvalDeadline,approval,{value:1n})).to.be.revertedWithCustomError(guard,"ApprovalExpired");
     });
-    it("approval cannot bypass maxTxValue or dailyLimit", async function () {
+    it("approval cannot bypass maxTxValue", async function () {
       const capped = await createPolicy(10n,0n,1n);
       const intent = await signIntent(capped,2n,0n);
       const approval = await signApproval(capped,2n,0n,DEADLINE);
       await expect(guard.executeWithApproval(agentAddress,wallet.address,targetAddress,2n,"0x",0n,DEADLINE,capped,intent,DEADLINE,approval,{value:2n})).to.be.revertedWithCustomError(guard,"MaxTxValueExceeded");
+    });
+    it("approval cannot bypass the daily limit", async function () {
       const limited = await createPolicy(1n,0n);
       await executeWithApproval(limited,1n,0n,DEADLINE);
       const intent2 = await signIntent(limited,1n,1n);
