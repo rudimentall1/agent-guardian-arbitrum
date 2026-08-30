@@ -78,7 +78,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     maxTxValue = ethers.parseEther("100")
   ) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(`${dailyLimit}-${approvalThreshold}-${targetAddressForPolicy}-${Date.now()}-${Math.random()}`));
-    await policyRegistry.connect(owner).createPolicy(
+    const encoded = policyRegistry.interface.encodeFunctionData("createPolicy", [
       salt,
       agent.address,
       maxTxValue,
@@ -87,8 +87,13 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       0n,
       FAR_DEADLINE,
       [],
-      [targetAddressForPolicy]
-    );
+      [targetAddressForPolicy],
+    ]);
+    const tx = await owner.sendTransaction({
+      to: await policyRegistry.getAddress(),
+      data: encoded,
+    });
+    await tx.wait();
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
     return await policyRegistry.policyHashOf(policyId);
   }
