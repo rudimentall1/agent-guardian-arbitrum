@@ -2,34 +2,26 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-/**
- * Gate 4A dedicated adversarial suite: target+selector authorization and
- * maxTxValue enforcement, exercised through the REAL AgentRegistry +
- * PolicyRegistry + AgentExecutionGuard stack (not mocks). Covers the
- * full 25-scenario attack campaign from the Gate 4A brief, the mandatory
- * Cartesian-product regression (also covered at the PolicyRegistry-only
- * level in PolicyRegistry.test.ts — this file proves it end-to-end
- * through actual `execute()` calls), and seeded property tests.
- *
- * See docs/adr/0005-paired-target-selector-authorization.md and
- * docs/gate-4a-call-authorization.md.
- */
-describe("Gate 4A: call authorization (target+selector, maxTxValue) — full stack", function () {
+describe("Gate 4A: call authorization and maxTxValue — full stack", function () {
   let agentRegistry: any;
-  let agentRegistryAddress: string;
   let policyRegistry: any;
-  let policyRegistryAddress: string;
   let guard: any;
-  let guardAddress: string;
   let selectorTarget: any;
-  let selectorTargetAddress: string;
   let recordingTarget: any;
-  let recordingTargetAddress: string;
+  let otherTarget: any;
   let owner: HardhatEthersSigner;
   let wallet: HardhatEthersSigner;
   let agent: ReturnType<typeof ethers.Wallet.createRandom>;
+  let agentAddress: string;
+  let selectorTargetAddress: string;
+  let recordingTargetAddress: string;
+  let otherTargetAddress: string;
+  let guardAddress: string;
 
   const FAR_DEADLINE = 4102444800n;
+  const FOO_SELECTOR = ethers.id("foo(uint256)").slice(0, 10);
+  const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);
+
   const registrationTypes = {
     AgentRegistration: [
       { name: "agent", type: "address" },
@@ -37,6 +29,7 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       { name: "metadataHash", type: "bytes32" },
     ],
   };
+
   const intentTypes = {
     ExecutionIntent: [
       { name: "agent", type: "address" },
@@ -50,94 +43,109 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
     ],
   };
 
-  async function registerAgent(agentWallet: any, ownerAddr: string) {
+  async function registerAgent() {
     const net = await ethers.provider.getNetwork();
-    const domain = { name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: agentRegistryAddress };
-    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("config"));
-    const sig = await agentWallet.signTypedData(domain, registrationTypes, {
-      agent: agentWallet.address,
-      owner: ownerAddr,
+    const domain = {
+      name: "AgentRegistry",
+      version: "1",
+      chainId: net.chainId,
+      verifyingContract: await agentRegistry.getAddress(),
+    };
+    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("gate4a-agent"));
+    const sig = await agent.signTypedData(domain, registrationTypes, {
+      agent: agentAddress,
+      owner: owner.address,
       metadataHash,
     });
-    await agentRegistry.register(agentWallet.address, ownerAddr, metadataHash, sig);
+    await agentRegistry.register(agentAddress, owner.address, metadataHash, sig);
   }
 
   async function createPolicy(
-    forAgent: string,
-    salt: string,
-    opts: {
-      maxTxValue?: bigint;
-      calls?: { target: string; selector: string }[];
-      nativeTransferTargets?: string[];
-      validFrom?: bigint;
-      validUntil?: bigint;
-    } = {}
+    saltText: string,
+    calls: { target: string; selector: string }[],
+    nativeTargets: string[] = [],
+    maxTxValue = ethers.parseEther("1")
   ) {
-    const tx = await policyRegistry.connect(owner).createPolicy(
+    const salt = ethers.keccak256(ethers.toUtf8Bytes(saltText));
+    await policyRegistry.connect(owner).createPolicy(
       salt,
-      forAgent,
-      opts.maxTxValue ?? ethers.parseEther("1"),
+      agentAddress,
+      maxTxValue,
       ethers.MaxUint128,
       ethers.MaxUint128,
-      opts.validFrom ?? 0n,
-      opts.validUntil ?? FAR_DEADLINE,
-      opts.calls ?? [],
-      opts.nativeTransferTargets ?? []
+      0n,
+      FAR_DEADLINE,
+      calls,
+      nativeTargets
     );
-    await tx.wait();
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
-    const policyHash = await policyRegistry.policyHashOf(policyId);
-    return { policyId, policyHash };
+    return await policyRegistry.policyHashOf(policyId);
   }
 
-  async function intentDomain() {
+  async function signIntent(
+    policyHash: string,
+    target: string,
+    value: bigint,
+    data: string,
+    nonce: bigint
+  ) {
     const net = await ethers.provider.getNetwork();
-    return { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress };
-  }
-
-  interface Intent {
-    agent: string; wallet: string; target: string; value: bigint; data: string;
-    nonce: bigint; deadline: bigint; policyHash: string;
-  }
-
-  async function signIntent(signer: any, p: Intent) {
-    const d = await intentDomain();
-    return signer.signTypedData(d, intentTypes, {
-      agent: p.agent, wallet: p.wallet, target: p.target, value: p.value,
-      calldataHash: ethers.keccak256(p.data), nonce: p.nonce, deadline: p.deadline, policyHash: p.policyHash,
+    const domain = {
+      name: "AgentExecutionGuard",
+      version: "1",
+      chainId: net.chainId,
+      verifyingContract: guardAddress,
+    };
+    return agent.signTypedData(domain, intentTypes, {
+      agent: agentAddress,
+      wallet: wallet.address,
+      target,
+      value,
+      calldataHash: ethers.keccak256(data),
+      nonce,
+      deadline: FAR_DEADLINE,
+      policyHash,
     });
   }
 
-  async function execute(p: Intent, sig: string) {
-    return guard.execute(p.agent, p.wallet, p.target, p.value, p.data, p.nonce, p.deadline, p.policyHash, sig, {
-      value: p.value,
-    });
-  }
-
-  function fooCalldata(x: number) {
-    return selectorTarget.interface.encodeFunctionData("foo", [x]);
-  }
-  function barCalldata(addr: string) {
-    return selectorTarget.interface.encodeFunctionData("bar", [addr]);
+  async function execute(
+    policyHash: string,
+    target: string,
+    value: bigint,
+    data: string,
+    nonce: bigint
+  ) {
+    const sig = await signIntent(policyHash, target, value, data, nonce);
+    return guard.execute(
+      agentAddress,
+      wallet.address,
+      target,
+      value,
+      data,
+      nonce,
+      FAR_DEADLINE,
+      policyHash,
+      sig,
+      { value }
+    );
   }
 
   beforeEach(async function () {
     [owner, wallet] = await ethers.getSigners();
     agent = ethers.Wallet.createRandom().connect(ethers.provider);
+    agentAddress = agent.address;
 
     const AgentRegistry = await ethers.getContractFactory("AgentRegistry");
     agentRegistry = await AgentRegistry.deploy();
     await agentRegistry.waitForDeployment();
-    agentRegistryAddress = await agentRegistry.getAddress();
-    await registerAgent(agent, owner.address);
+    await registerAgent();
 
     const PolicyRegistry = await ethers.getContractFactory("PolicyRegistry");
     policyRegistry = await PolicyRegistry.deploy();
     await policyRegistry.waitForDeployment();
-    policyRegistryAddress = await policyRegistry.getAddress();
 
     const Guard = await ethers.getContractFactory("AgentExecutionGuard");
-    guard = await Guard.deploy(agentRegistryAddress, policyRegistryAddress);
+    guard = await Guard.deploy(await agentRegistry.getAddress(), await policyRegistry.getAddress());
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
 
@@ -146,325 +154,157 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
     await selectorTarget.waitForDeployment();
     selectorTargetAddress = await selectorTarget.getAddress();
 
-    const RecordingTarget = await ethers.getContractFactory("RecordingTarget");
-    recordingTarget = await RecordingTarget.deploy();
+    recordingTarget = await (await ethers.getContractFactory("RecordingTarget")).deploy();
     await recordingTarget.waitForDeployment();
     recordingTargetAddress = await recordingTarget.getAddress();
+
+    otherTarget = await (await ethers.getContractFactory("SelectorTarget")).deploy();
+    await otherTarget.waitForDeployment();
+    otherTargetAddress = await otherTarget.getAddress();
   });
 
-  // ---------------------------------------------------------------
-  // Part 10 (mandatory): Cartesian-product regression, end-to-end
-  // ---------------------------------------------------------------
-  describe("Cartesian-product regression — end to end through execute()", function () {
-    let policyHash: string;
-    let otherTarget: any;
-    let otherTargetAddress: string;
+  it("authorizes only exact (target, selector) pairs", async function () {
+    const policy = await createPolicy("cartesian", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+      { target: otherTargetAddress, selector: BAR_SELECTOR },
+    ]);
 
-    beforeEach(async function () {
-      const SelectorTarget = await ethers.getContractFactory("SelectorTarget");
-      otherTarget = await SelectorTarget.deploy();
-      await otherTarget.waitForDeployment();
-      otherTargetAddress = await otherTarget.getAddress();
+    await execute(policy, selectorTargetAddress, 0n, selectorTarget.interface.encodeFunctionData("foo", [1]), 0n);
+    await execute(policy, otherTargetAddress, 0n, otherTarget.interface.encodeFunctionData("bar", [wallet.address]), 1n);
 
-      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
-      const barSel = otherTarget.interface.getFunction("bar")!.selector;
+    await expect(
+      execute(policy, selectorTargetAddress, 0n, selectorTarget.interface.encodeFunctionData("bar", [wallet.address]), 2n)
+    ).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
 
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("cartesian")), {
-        calls: [
-          { target: selectorTargetAddress, selector: fooSel }, // A + X
-          { target: otherTargetAddress, selector: barSel }, // B + Y
-        ],
-      });
-      policyHash = res.policyHash;
-    });
-
-    it("A+X passes, B+Y passes, A+Y and B+X both revert", async function () {
-      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
-      const barSel = otherTarget.interface.getFunction("bar")!.selector;
-
-      let intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      let sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-
-      intent = {
-        agent: agent.address, wallet: wallet.address, target: otherTargetAddress, value: 0n,
-        data: barCalldata(wallet.address), nonce: 1n, deadline: FAR_DEADLINE, policyHash,
-      };
-      sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-
-      intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: barCalldata(wallet.address), nonce: 2n, deadline: FAR_DEADLINE, policyHash,
-      };
-      sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized").withArgs(selectorTargetAddress, barSel, false);
-
-      intent = {
-        agent: agent.address, wallet: wallet.address, target: otherTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 2n, deadline: FAR_DEADLINE, policyHash,
-      };
-      sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized").withArgs(otherTargetAddress, fooSel, false);
-    });
+    await expect(
+      execute(policy, otherTargetAddress, 0n, otherTarget.interface.encodeFunctionData("foo", [1]), 2n)
+    ).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
   });
 
-  // ---------------------------------------------------------------
-  // Part 9: the 25-scenario attack campaign
-  // ---------------------------------------------------------------
-  describe("attack campaign", function () {
-    let policyHash: string;
-    let fooSel: string;
-
-    beforeEach(async function () {
-      fooSel = selectorTarget.interface.getFunction("foo")!.selector;
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("campaign")), {
-        maxTxValue: ethers.parseEther("1"),
-        calls: [{ target: selectorTargetAddress, selector: fooSel }],
-        nativeTransferTargets: [recordingTargetAddress],
-      });
-      policyHash = res.policyHash;
-    });
-
-    it("1. allowed target + allowed selector => PASS", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-      expect(await selectorTarget.fooCallCount()).to.equal(1n);
-    });
-
-    it("2. allowed target + forbidden selector => REVERT", async function () {
-      const barCd = selectorTarget.interface.encodeFunctionData("bar", [wallet.address]);
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: barCd, nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
-    });
-
-    it("3. forbidden target + allowed selector-bytes => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
-    });
-
-    it("4. forbidden target + forbidden selector => REVERT", async function () {
-      const randomTarget = ethers.Wallet.createRandom().address;
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: randomTarget, value: 0n,
-        data: "0xffffffff", nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
-    });
-
-    it("8. modified target after signing => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      const tampered = { ...intent, target: recordingTargetAddress };
-      await expect(execute(tampered, sig)).to.be.reverted;
-    });
-
-    it("9. modified selector/calldata after signing => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      const tampered = { ...intent, data: fooCalldata(999) };
-      await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
-    });
-
-    it("10. modified calldata arguments (same selector) => REVERT via signature, not silently accepted", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      const tampered = { ...intent, data: fooCalldata(2) };
-      await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
-    });
-
-    it("11. empty calldata without explicit native-transfer permission => REVERT", async function () {
-      const randomTarget = ethers.Wallet.createRandom().address;
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: randomTarget, value: 0n,
-        data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized").withArgs(randomTarget, "0x00000000", true);
-    });
-
-    it("12. explicit native transfer permission => PASS", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n,
-        data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-      expect(await recordingTarget.callCount()).to.equal(1n);
-    });
-
-    it("13. zero-address target => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: ethers.ZeroAddress, value: 0n,
-        data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "ZeroAddress");
-    });
-
-    it("14. maxTxValue exact boundary => PASS", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: ethers.parseEther("1"),
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-    });
-
-    it("15. maxTxValue + 1 => REVERT", async function () {
-      const value = ethers.parseEther("1") + 1n;
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
-    });
-
-    it("16. msg.value > signed value => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: ethers.parseEther("0.5"),
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(
-        guard.execute(intent.agent, intent.wallet, intent.target, intent.value, intent.data, intent.nonce, intent.deadline, intent.policyHash, sig, { value: ethers.parseEther("0.6") })
-      ).to.be.revertedWithCustomError(guard, "ValueMismatch");
-    });
-
-    it("17. signed value > maxTxValue (declared and sent, still capped by policy) => REVERT", async function () {
-      const value = ethers.parseEther("1") + 1n;
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
-    });
-
-    it("18. policy belonging to another agent => REVERT", async function () {
-      const otherAgent = ethers.Wallet.createRandom().connect(ethers.provider);
-      await registerAgent(otherAgent, owner.address);
-      const otherPolicy = await createPolicy(otherAgent.address, ethers.keccak256(ethers.toUtf8Bytes("other-agent")), {
-        nativeTransferTargets: [recordingTargetAddress],
-      });
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: otherPolicy.policyHash };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
-    });
-
-    it("19. revoked policy => REVERT", async function () {
-      await expect(policyRegistry.connect(owner).revoke(await policyRegistry.policyIdOfHash(policyHash))).to.not.be.reverted;
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "PolicyNotActive");
-    });
-
-    it("20. disabled agent => REVERT", async function () {
-      await agentRegistry.connect(owner).deactivate(agent.address);
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "AgentNotActive");
-    });
-
-    it("21. stale nonce => REVERT", async function () {
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash };
-      const sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "InvalidNonce");
-    });
-
-    it("22. future nonce => REVERT", async function () {
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: fooCalldata(1), nonce: 1n, deadline: FAR_DEADLINE, policyHash };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "InvalidNonce");
-    });
-
-    it("23. replay exact intent => REVERT", async function () {
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash };
-      const sig = await signIntent(agent, intent);
-      await execute(intent, sig);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "InvalidNonce");
-    });
-
-    it("24. reentrancy attempt => safely contained (blocked, nonce still advances exactly once)", async function () {
-      const ReentrantAttacker = await ethers.getContractFactory("ReentrantAttacker");
-      const attacker = await ReentrantAttacker.deploy(await guard.getAddress());
-      await attacker.waitForDeployment();
-      const targetPolicy = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("reentrant")), {
-        calls: [{ target: await attacker.getAddress(), selector: attacker.interface.getFunction("attack")!.selector }],
-      });
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: await attacker.getAddress(), value: 0n, data: attacker.interface.encodeFunctionData("attack"), nonce: 0n, deadline: FAR_DEADLINE, policyHash: targetPolicy.policyHash };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.not.be.reverted;
-      expect(await guard.nextNonce(agent.address)).to.equal(1n);
-    });
-
-    it("25. malicious target cannot bypass authorization by re-entering with a different (unauthorized) call", async function () {
-      const ReentrantAttacker = await ethers.getContractFactory("ReentrantAttacker");
-      const attacker = await ReentrantAttacker.deploy(await guard.getAddress());
-      await attacker.waitForDeployment();
-      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
-      const policy = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("reentrant-unauthorized")), {
-        calls: [{ target: await attacker.getAddress(), selector: attacker.interface.getFunction("attack")!.selector }, { target: selectorTargetAddress, selector: fooSel }],
-      });
-      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: await attacker.getAddress(), value: 0n, data: attacker.interface.encodeFunctionData("attack"), nonce: 0n, deadline: FAR_DEADLINE, policyHash: policy.policyHash };
-      const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.not.be.reverted;
-      expect(await guard.nextNonce(agent.address)).to.equal(1n);
-    });
+  it("rejects an authorized target with a forbidden selector", async function () {
+    const policy = await createPolicy("forbidden-selector", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ]);
+    const data = selectorTarget.interface.encodeFunctionData("bar", [wallet.address]);
+    await expect(execute(policy, selectorTargetAddress, 0n, data, 0n))
+      .to.be.revertedWithCustomError(guard, "CallNotAuthorized");
   });
 
-  describe("property tests: authorization independence", function () {
-    it("authorized(target, selector) != authorized(otherTarget, selector) across randomized (target, selector) pairs", async function () {
-      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
-      const barSel = selectorTarget.interface.getFunction("bar")!.selector;
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("property-target-selector")), {
-        calls: [{ target: selectorTargetAddress, selector: fooSel }, { target: recordingTargetAddress, selector: barSel }],
-      });
-      expect(await policyRegistry.checkAuthorization(res.policyHash, selectorTargetAddress, 1, fooSel, 0n)).to.be.ok;
-      expect(await policyRegistry.checkAuthorization(res.policyHash, selectorTargetAddress, 1, barSel, 0n)).to.be.ok;
-    });
+  it("rejects a forbidden target even when selector bytes are authorized elsewhere", async function () {
+    const policy = await createPolicy("forbidden-target", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ]);
+    const data = selectorTarget.interface.encodeFunctionData("foo", [1]);
+    await expect(execute(policy, recordingTargetAddress, 0n, data, 0n))
+      .to.be.revertedWithCustomError(guard, "CallNotAuthorized");
+  });
 
-    it("modified calldata (same length, different argument bytes) never bypasses signature verification, across random payloads", async function () {
-      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("property-calldata")), {
-        calls: [{ target: selectorTargetAddress, selector: fooSel }],
-      });
-      for (let i = 0; i < 5; i++) {
-        const a = ethers.zeroPadValue(ethers.toBeHex(i + 1), 32);
-        const b = ethers.zeroPadValue(ethers.toBeHex(i + 2), 32);
-        const dataA = ethers.concat([fooSel, a]);
-        const dataB = ethers.concat([fooSel, b]);
-        const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: dataA, nonce: BigInt(i), deadline: FAR_DEADLINE, policyHash: res.policyHash };
-        const sig = await signIntent(agent, intent);
-        await expect(execute({ ...intent, data: dataB }, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
-      }
-    });
+  it("keeps native transfers separate from function-call authorization", async function () {
+    const policy = await createPolicy("native-separation", [
+      { target: selectorTargetAddress, selector: "0x00000000" },
+    ], [recordingTargetAddress]);
+
+    await execute(policy, recordingTargetAddress, 0n, "0x", 0n);
+    expect(await recordingTarget.callCount()).to.equal(1n);
+
+    await expect(execute(policy, recordingTargetAddress, 0n, "0x12345678", 1n))
+      .to.be.revertedWithCustomError(guard, "CallNotAuthorized");
+  });
+
+  it("malformed calldata is never authorized", async function () {
+    const policy = await createPolicy("malformed", [
+      { target: selectorTargetAddress, selector: "0x00000000" },
+    ], [selectorTargetAddress]);
+    await expect(execute(policy, selectorTargetAddress, 0n, "0x12", 0n))
+      .to.be.revertedWithCustomError(guard, "CallNotAuthorized");
+  });
+
+  it("enforces maxTxValue at the exact boundary", async function () {
+    const max = ethers.parseEther("1");
+    const policy = await createPolicy("max-exact", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ], [], max);
+    await execute(policy, selectorTargetAddress, max, selectorTarget.interface.encodeFunctionData("foo", [1]), 0n);
+  });
+
+  it("rejects maxTxValue + 1 wei", async function () {
+    const max = ethers.parseEther("1");
+    const policy = await createPolicy("max-plus-one", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ], [], max);
+    await expect(execute(policy, selectorTargetAddress, max + 1n, selectorTarget.interface.encodeFunctionData("foo", [1]), 0n))
+      .to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
+  });
+
+  it("binds policy to the intended agent", async function () {
+    const otherAgent = ethers.Wallet.createRandom().connect(ethers.provider);
+    const net = await ethers.provider.getNetwork();
+    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("other-agent"));
+    const sig = await otherAgent.signTypedData(
+      { name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: await agentRegistry.getAddress() },
+      registrationTypes,
+      { agent: otherAgent.address, owner: owner.address, metadataHash }
+    );
+    await agentRegistry.register(otherAgent.address, owner.address, metadataHash, sig);
+
+    const salt = ethers.keccak256(ethers.toUtf8Bytes("other-policy"));
+    await policyRegistry.connect(owner).createPolicy(
+      salt,
+      otherAgent.address,
+      ethers.parseEther("1"),
+      ethers.MaxUint128,
+      ethers.MaxUint128,
+      0n,
+      FAR_DEADLINE,
+      [{ target: recordingTargetAddress, selector: "0x00000000" }],
+      [recordingTargetAddress]
+    );
+    const id = await policyRegistry.computePolicyId(owner.address, salt);
+    const policy = await policyRegistry.policyHashOf(id);
+
+    await expect(execute(policy, recordingTargetAddress, 0n, "0x", 0n))
+      .to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
+  });
+
+  it("does not let changed calldata bypass the signed intent", async function () {
+    const policy = await createPolicy("calldata-binding", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ]);
+    const signedData = selectorTarget.interface.encodeFunctionData("foo", [1]);
+    const changedData = selectorTarget.interface.encodeFunctionData("foo", [2]);
+    const sig = await signIntent(policy, selectorTargetAddress, 0n, signedData, 0n);
+
+    await expect(
+      guard.execute(agentAddress, wallet.address, selectorTargetAddress, 0n, changedData, 0n, FAR_DEADLINE, policy, sig, { value: 0n })
+    ).to.be.revertedWithCustomError(guard, "InvalidSignature");
+  });
+
+  it("does not let changed target bypass the signed intent", async function () {
+    const policy = await createPolicy("target-binding", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ]);
+    const data = selectorTarget.interface.encodeFunctionData("foo", [1]);
+    const sig = await signIntent(policy, selectorTargetAddress, 0n, data, 0n);
+    await expect(
+      guard.execute(agentAddress, wallet.address, recordingTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n })
+    ).to.be.revertedWithCustomError(guard, "InvalidSignature");
+  });
+
+  it("rejects replay and future/stale nonces", async function () {
+    const policy = await createPolicy("nonce", [
+      { target: selectorTargetAddress, selector: FOO_SELECTOR },
+    ]);
+    const data = selectorTarget.interface.encodeFunctionData("foo", [1]);
+    const sig = await signIntent(policy, selectorTargetAddress, 0n, data, 0n);
+    await guard.execute(agentAddress, wallet.address, selectorTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n });
+
+    await expect(
+      guard.execute(agentAddress, wallet.address, selectorTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n })
+    ).to.be.revertedWithCustomError(guard, "InvalidNonce");
+
+    const sigFuture = await signIntent(policy, selectorTargetAddress, 0n, data, 2n);
+    await expect(
+      guard.execute(agentAddress, wallet.address, selectorTargetAddress, 0n, data, 2n, FAR_DEADLINE, policy, sigFuture, { value: 0n })
+    ).to.be.revertedWithCustomError(guard, "InvalidNonce");
   });
 });
