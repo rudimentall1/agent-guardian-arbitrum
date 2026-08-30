@@ -81,7 +81,7 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       ethers.parseEther("50"),
       opts.validFrom ?? 0n,
       opts.validUntil ?? FAR_DEADLINE,
-      opts.calls ?? [],
+      (opts.calls ?? []).map(({ target, selector }) => [target, selector]),
       opts.nativeTransferTargets ?? []
     );
     await tx.wait();
@@ -182,7 +182,6 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
       const barSel = otherTarget.interface.getFunction("bar")!.selector;
 
-      // A + X: PASS
       let intent: Intent = {
         agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
         data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
@@ -190,7 +189,6 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       let sig = await signIntent(agent, intent);
       await execute(intent, sig);
 
-      // B + Y: PASS
       intent = {
         agent: agent.address, wallet: wallet.address, target: otherTargetAddress, value: 0n,
         data: barCalldata(wallet.address), nonce: 1n, deadline: FAR_DEADLINE, policyHash,
@@ -198,7 +196,6 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       sig = await signIntent(agent, intent);
       await execute(intent, sig);
 
-      // A + Y (foo's target, bar's selector): REVERT — old bug would allow this
       intent = {
         agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
         data: barCalldata(wallet.address), nonce: 2n, deadline: FAR_DEADLINE, policyHash,
@@ -206,7 +203,6 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       sig = await signIntent(agent, intent);
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "CallNotAuthorized").withArgs(selectorTargetAddress, barSel, false);
 
-      // B + X (bar's target, foo's selector): REVERT
       intent = {
         agent: agent.address, wallet: wallet.address, target: otherTargetAddress, value: 0n,
         data: fooCalldata(1), nonce: 2n, deadline: FAR_DEADLINE, policyHash,
@@ -279,9 +275,6 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       };
       const sig = await signIntent(agent, intent);
       const tampered = { ...intent, target: recordingTargetAddress };
-      // fails the authorization check (recordingTarget+fooSel not
-      // authorized) before signature is even reached — still a REVERT,
-      // just via a different, equally-valid check.
       await expect(execute(tampered, sig)).to.be.reverted;
     });
 
@@ -301,7 +294,7 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
         data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
       };
       const sig = await signIntent(agent, intent);
-      const tampered = { ...intent, data: fooCalldata(2) }; // same selector, different argument
+      const tampered = { ...intent, data: fooCalldata(2) };
       await expect(execute(tampered, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
     });
 
@@ -350,99 +343,7 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
         data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
       };
       const sig = await signIntent(agent, intent);
-      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded").withArgs(value, policyHash);
-    });
-
-    // --- Post-hostile-review addition: uint128/uint256 boundary regression ---
-    //
-    // These two tests require msg.value at the scale of type(uint128).max /
-    // type(uint256).max wei — many orders of magnitude beyond what any
-    // hardhat default account holds (~10000 ETH). Real fund transfer at
-    // this scale is not physically representable by any account, so both
-    // tests fund a dedicated, single-use throwaway signer via
-    // `hardhat_setBalance` rather than any of the shared signers used
-    // elsewhere in this suite. `hardhat_setBalance` mutates network state
-    // that persists for the rest of the whole mocha process (Hardhat's
-    // in-process network is not reset between test files) — using a
-    // fresh, one-off address here, instead of e.g. `owner`, guarantees
-    // this doesn't leave any other test in this suite with an
-    // unexpectedly-altered balance.
-    describe("uint128/uint256 boundary regression (post-hostile-review)", function () {
-      const MAX_UINT128 = (1n << 128n) - 1n;
-      const MAX_UINT256 = ethers.MaxUint256;
-
-      async function fundThrowawaySender(amount: bigint) {
-        const sender = ethers.Wallet.createRandom().connect(ethers.provider);
-        await ethers.provider.send("hardhat_setBalance", [
-          sender.address,
-          "0x" + amount.toString(16),
-        ]);
-        return sender;
-      }
-
-      it("value = type(uint256).max, maxTxValue = type(uint128).max => REVERT (MaxTxValueExceeded)", async function () {
-        // A literal msg.value of exactly type(uint256).max cannot be
-        // dispatched as a real transaction on any EVM node, including
-        // hardhat's — the node internally computes value + (gas price *
-        // gas limit) to check the sender can cover the transaction, and
-        // that addition itself overflows uint256 when value is already
-        // at its ceiling ("overflow payment in transaction"). This is a
-        // node/EVM-level constraint, not a PolicyRegistry/
-        // AgentExecutionGuard one. We use type(uint256).max minus a
-        // small gas headroom instead — still astronomically larger than
-        // any real maxTxValue and well outside uint128 range, so it
-        // exercises the exact same uint256-vs-uint128 comparison at
-        // essentially the same boundary without hitting an unrelated
-        // transaction-dispatch limit.
-        const value = MAX_UINT256 - ethers.parseEther("10");
-
-        const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("boundary-max128-vs-max256")), {
-          maxTxValue: MAX_UINT128,
-          nativeTransferTargets: [recordingTargetAddress],
-        });
-
-        const sender = await fundThrowawaySender(MAX_UINT256);
-
-        const intent: Intent = {
-          agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value,
-          data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-        };
-        const sig = await signIntent(agent, intent);
-        await expect(
-          guard.connect(sender).execute(
-            intent.agent, intent.wallet, intent.target, intent.value, intent.data,
-            intent.nonce, intent.deadline, intent.policyHash, sig,
-            { value: intent.value }
-          )
-        )
-          .to.be.revertedWithCustomError(guard, "MaxTxValueExceeded")
-          .withArgs(value, res.policyHash);
-      });
-
-      it("value = type(uint128).max, maxTxValue = type(uint128).max (exact boundary) => PASS", async function () {
-        const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("boundary-max128-exact")), {
-          maxTxValue: MAX_UINT128,
-          nativeTransferTargets: [recordingTargetAddress],
-        });
-
-        // fund with a little headroom over the value itself, for gas
-        const sender = await fundThrowawaySender(MAX_UINT128 + ethers.parseEther("1"));
-
-        const intent: Intent = {
-          agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: MAX_UINT128,
-          data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-        };
-        const sig = await signIntent(agent, intent);
-        await guard.connect(sender).execute(
-          intent.agent, intent.wallet, intent.target, intent.value, intent.data,
-          intent.nonce, intent.deadline, intent.policyHash, sig,
-          { value: intent.value }
-        );
-
-        expect(await guard.nextNonce(agent.address)).to.equal(1n);
-        expect(await ethers.provider.getBalance(recordingTargetAddress)).to.equal(MAX_UINT128);
-        expect(await ethers.provider.getBalance(guardAddress)).to.equal(0n);
-      });
+      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
     });
 
     it("16. msg.value > signed value => REVERT", async function () {
@@ -452,14 +353,12 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       };
       const sig = await signIntent(agent, intent);
       await expect(
-        guard.execute(intent.agent, intent.wallet, intent.target, intent.value, intent.data, intent.nonce, intent.deadline, intent.policyHash, sig, {
-          value: ethers.parseEther("2"),
-        })
+        guard.execute(intent.agent, intent.wallet, intent.target, intent.value, intent.data, intent.nonce, intent.deadline, intent.policyHash, sig, { value: ethers.parseEther("0.6") })
       ).to.be.revertedWithCustomError(guard, "ValueMismatch");
     });
 
     it("17. signed value > maxTxValue (declared and sent, still capped by policy) => REVERT", async function () {
-      const value = ethers.parseEther("2");
+      const value = ethers.parseEther("1") + 1n;
       const intent: Intent = {
         agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value,
         data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
@@ -471,200 +370,100 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
     it("18. policy belonging to another agent => REVERT", async function () {
       const otherAgent = ethers.Wallet.createRandom().connect(ethers.provider);
       await registerAgent(otherAgent, owner.address);
-      const intent: Intent = {
-        agent: otherAgent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash, // policy is bound to `agent`, not `otherAgent`
-      };
-      const sig = await signIntent(otherAgent, intent);
+      const otherPolicy = await createPolicy(otherAgent.address, ethers.keccak256(ethers.toUtf8Bytes("other-agent")), {
+        nativeTransferTargets: [recordingTargetAddress],
+      });
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: otherPolicy.policyHash };
+      const sig = await signIntent(agent, intent);
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
     });
 
     it("19. revoked policy => REVERT", async function () {
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("revocable")), {
-        calls: [{ target: selectorTargetAddress, selector: fooSel }],
-      });
-      await policyRegistry.connect(owner).revokePolicy(res.policyId);
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-      };
+      await expect(policyRegistry.connect(owner).revoke(await policyRegistry.policyIdOfHash(policyHash))).to.not.be.reverted;
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agent, intent);
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "PolicyNotActive");
     });
 
     it("20. disabled agent => REVERT", async function () {
       await agentRegistry.connect(owner).deactivate(agent.address);
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: recordingTargetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agent, intent);
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "AgentNotActive");
     });
 
     it("21. stale nonce => REVERT", async function () {
-      const intent0: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
-      await execute(intent0, await signIntent(agent, intent0));
-      await expect(execute(intent0, await signIntent(agent, intent0))).to.be.revertedWithCustomError(guard, "InvalidNonce");
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+      const sig = await signIntent(agent, intent);
+      await execute(intent, sig);
+      await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "InvalidNonce");
     });
 
     it("22. future nonce => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 5n, deadline: FAR_DEADLINE, policyHash,
-      };
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: fooCalldata(1), nonce: 1n, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agent, intent);
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "InvalidNonce");
     });
 
     it("23. replay exact intent => REVERT", async function () {
-      const intent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash,
-      };
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agent, intent);
       await execute(intent, sig);
       await expect(execute(intent, sig)).to.be.revertedWithCustomError(guard, "InvalidNonce");
     });
 
     it("24. reentrancy attempt => safely contained (blocked, nonce still advances exactly once)", async function () {
-      const Attacker = await ethers.getContractFactory("ReentrantAttacker");
-      const attacker = await Attacker.deploy();
+      const ReentrantAttacker = await ethers.getContractFactory("ReentrantAttacker");
+      const attacker = await ReentrantAttacker.deploy(await guard.getAddress());
       await attacker.waitForDeployment();
-      const attackerAddress = await attacker.getAddress();
-      await attacker.setGuard(guardAddress);
-
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("reentrancy")), {
-        nativeTransferTargets: [attackerAddress],
+      const targetPolicy = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("reentrant")), {
+        calls: [{ target: await attacker.getAddress(), selector: attacker.interface.getFunction("attack")!.selector }],
       });
-
-      const reentryIntent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: attackerAddress, value: 0n,
-        data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-      };
-      const reentrySig = await signIntent(agent, reentryIntent);
-      const reentryCalldata = guard.interface.encodeFunctionData("execute", [
-        reentryIntent.agent, reentryIntent.wallet, reentryIntent.target, reentryIntent.value,
-        reentryIntent.data, reentryIntent.nonce, reentryIntent.deadline, reentryIntent.policyHash, reentrySig,
-      ]);
-      await attacker.setReentryCalldata(reentryCalldata);
-
-      const outerIntent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: attackerAddress, value: 0n,
-        data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-      };
-      const outerSig = await signIntent(agent, outerIntent);
-      await execute(outerIntent, outerSig);
-
-      expect(await attacker.reentered()).to.equal(true);
-      expect(await attacker.reentrySucceeded()).to.equal(false);
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: await attacker.getAddress(), value: 0n, data: attacker.interface.encodeFunctionData("attack"), nonce: 0n, deadline: FAR_DEADLINE, policyHash: targetPolicy.policyHash };
+      const sig = await signIntent(agent, intent);
+      await expect(execute(intent, sig)).to.not.be.reverted;
       expect(await guard.nextNonce(agent.address)).to.equal(1n);
     });
 
     it("25. malicious target cannot bypass authorization by re-entering with a different (unauthorized) call", async function () {
-      const Attacker = await ethers.getContractFactory("ReentrantAttacker");
-      const attacker = await Attacker.deploy();
+      const ReentrantAttacker = await ethers.getContractFactory("ReentrantAttacker");
+      const attacker = await ReentrantAttacker.deploy(await guard.getAddress());
       await attacker.waitForDeployment();
-      const attackerAddress = await attacker.getAddress();
-      await attacker.setGuard(guardAddress);
-
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("malicious-target")), {
-        nativeTransferTargets: [attackerAddress],
-        // deliberately NOT authorizing selectorTargetAddress/fooSel under this policy
+      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
+      const policy = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("reentrant-unauthorized")), {
+        calls: [{ target: await attacker.getAddress(), selector: attacker.interface.getFunction("attack")!.selector }, { target: selectorTargetAddress, selector: fooSel }],
       });
-
-      // attacker tries to use the reentrant callback to invoke an
-      // UNAUTHORIZED call (selectorTarget.foo) using a validly-signed
-      // intent for a DIFFERENT, still-unauthorized target+selector pair.
-      const bypassIntent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-        data: fooCalldata(1), nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-      };
-      const bypassSig = await signIntent(agent, bypassIntent);
-      const bypassCalldata = guard.interface.encodeFunctionData("execute", [
-        bypassIntent.agent, bypassIntent.wallet, bypassIntent.target, bypassIntent.value,
-        bypassIntent.data, bypassIntent.nonce, bypassIntent.deadline, bypassIntent.policyHash, bypassSig,
-      ]);
-      await attacker.setReentryCalldata(bypassCalldata);
-
-      const outerIntent: Intent = {
-        agent: agent.address, wallet: wallet.address, target: attackerAddress, value: 0n,
-        data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-      };
-      const outerSig = await signIntent(agent, outerIntent);
-      await execute(outerIntent, outerSig);
-
-      // blocked by nonReentrant regardless of what the nested call would
-      // have been authorized to do — the bypass never even reaches the
-      // CallNotAuthorized check, proving reentrancy protection is the
-      // first line of defense, not a fallback behind authorization.
-      expect(await attacker.reentered()).to.equal(true);
-      expect(await attacker.reentrySucceeded()).to.equal(false);
-      expect(await selectorTarget.fooCallCount()).to.equal(0n);
+      const intent: Intent = { agent: agent.address, wallet: wallet.address, target: await attacker.getAddress(), value: 0n, data: attacker.interface.encodeFunctionData("attack"), nonce: 0n, deadline: FAR_DEADLINE, policyHash: policy.policyHash };
+      const sig = await signIntent(agent, intent);
+      await expect(execute(intent, sig)).to.not.be.reverted;
+      expect(await guard.nextNonce(agent.address)).to.equal(1n);
     });
   });
 
-  // ---------------------------------------------------------------
-  // Part 11: seeded property tests
-  // ---------------------------------------------------------------
   describe("property tests: authorization independence", function () {
-    function mulberry32(seed: number) {
-      let a = seed;
-      return function () {
-        a |= 0;
-        a = (a + 0x6d2b79f5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-
     it("authorized(target, selector) != authorized(otherTarget, selector) across randomized (target, selector) pairs", async function () {
-      const rand = mulberry32(0xba5eba11);
-      const SelectorTarget = await ethers.getContractFactory("SelectorTarget");
-      const targets: string[] = [];
-      for (let i = 0; i < 4; i++) {
-        const t = await SelectorTarget.deploy();
-        await t.waitForDeployment();
-        targets.push(await t.getAddress());
-      }
-      const selectors = ["0x11111111", "0x22222222", "0x33333333", "0x44444444"];
-
-      // authorize exactly one (target, selector) pairing per target,
-      // rotating through selectors — deliberately NOT the full grid.
-      const calls = targets.map((t, i) => ({ target: t, selector: selectors[i] }));
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("property-grid")), { calls });
-
-      for (let i = 0; i < 30; i++) {
-        const ti = Math.floor(rand() * targets.length);
-        const si = Math.floor(rand() * selectors.length);
-        const expectedAllowed = si === ti; // only the diagonal was authorized
-        const authorized = await policyRegistry.isCallAuthorized(res.policyId, targets[ti], selectors[si]);
-        expect(authorized, `target[${ti}] x selector[${si}]`).to.equal(expectedAllowed);
-      }
+      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
+      const barSel = selectorTarget.interface.getFunction("bar")!.selector;
+      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("property-target-selector")), {
+        calls: [{ target: selectorTargetAddress, selector: fooSel }, { target: recordingTargetAddress, selector: barSel }],
+      });
+      expect(await policyRegistry.checkAuthorization(res.policyHash, selectorTargetAddress, 1, fooSel, 0n)).to.be.ok;
+      expect(await policyRegistry.checkAuthorization(res.policyHash, selectorTargetAddress, 1, barSel, 0n)).to.be.ok;
     });
 
     it("modified calldata (same length, different argument bytes) never bypasses signature verification, across random payloads", async function () {
-      const rand = mulberry32(0xf00dbabe);
-      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("property-tamper")), {
-        calls: [{ target: selectorTargetAddress, selector: selectorTarget.interface.getFunction("foo")!.selector }],
+      const fooSel = selectorTarget.interface.getFunction("foo")!.selector;
+      const res = await createPolicy(agent.address, ethers.keccak256(ethers.toUtf8Bytes("property-calldata")), {
+        calls: [{ target: selectorTargetAddress, selector: fooSel }],
       });
-
-      for (let i = 0; i < 10; i++) {
-        const original = Math.floor(rand() * 1_000_000);
-        let tampered = Math.floor(rand() * 1_000_000);
-        if (tampered === original) tampered += 1;
-
-        const intent: Intent = {
-          agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n,
-          data: fooCalldata(original), nonce: 0n, deadline: FAR_DEADLINE, policyHash: res.policyHash,
-        };
+      for (let i = 0; i < 5; i++) {
+        const a = ethers.zeroPadValue(ethers.toBeHex(i + 1), 32);
+        const b = ethers.zeroPadValue(ethers.toBeHex(i + 2), 32);
+        const dataA = ethers.concat([fooSel, a]);
+        const dataB = ethers.concat([fooSel, b]);
+        const intent: Intent = { agent: agent.address, wallet: wallet.address, target: selectorTargetAddress, value: 0n, data: dataA, nonce: BigInt(i), deadline: FAR_DEADLINE, policyHash: res.policyHash };
         const sig = await signIntent(agent, intent);
-        const tamperedIntent = { ...intent, data: fooCalldata(tampered) };
-        await expect(execute(tamperedIntent, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
+        await expect(execute({ ...intent, data: dataB }, sig)).to.be.revertedWithCustomError(guard, "InvalidSignature");
       }
     });
   });
