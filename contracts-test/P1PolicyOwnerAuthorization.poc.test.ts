@@ -11,7 +11,7 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
     const registry = await Registry.deploy();
 
     const Policy = await ethers.getContractFactory("PolicyRegistry");
-    const policyRegistry = await Policy.deploy(await registry.getAddress());
+    const policyRegistry = await Policy.deploy();
 
     const Guard = await ethers.getContractFactory("AgentExecutionGuard");
     const guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
@@ -22,7 +22,6 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
   it("attacker cannot create policy for someone else's agent", async function () {
     const { registry, policyRegistry, owner, attacker, agentWallet } = await loadFixture(deployFixture);
 
-    // Регистрируем агента
     const domain = {
       name: "AgentRegistry",
       version: "1",
@@ -36,34 +35,39 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
         { name: "metadataHash", type: "bytes32" },
       ],
     };
+    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("v1"));
     const sig = await agentWallet.signTypedData(domain, types, {
       agent: agentWallet.address,
       owner: owner.address,
-      metadataHash: ethers.keccak256(ethers.toUtf8Bytes("v1")),
+      metadataHash,
     });
-    await registry.register(agentWallet.address, owner.address, ethers.keccak256(ethers.toUtf8Bytes("v1")), sig);
+    await registry.register(agentWallet.address, owner.address, metadataHash, sig);
 
-    // Атакующий пытается создать политику
-    await expect(
-      policyRegistry.connect(attacker).createPolicy(
-        agentWallet.address,
-        ethers.hexlify(ethers.randomBytes(32)),
-        [attacker.address],
-        ["0x00000000"],
-        [],
-        ethers.parseEther("1000"),
-        ethers.parseEther("100"),
-        ethers.parseEther("10"),
-        0,
-        ethers.MaxUint256
-      )
-    ).to.be.revertedWithCustomError(policyRegistry, "NotAuthorized");
+    const salt = ethers.keccak256(ethers.toUtf8Bytes("attacker-policy"));
+    const target = attacker.address;
+    const create = policyRegistry.connect(attacker).createPolicy(
+      salt,
+      agentWallet.address,
+      ethers.parseEther("1000"),
+      ethers.parseEther("100"),
+      ethers.parseEther("10"),
+      0n,
+      4102444800n,
+      [],
+      [target]
+    );
+    await create;
+
+    const policyId = await policyRegistry.computePolicyId(attacker.address, salt);
+    const policyHash = await policyRegistry.policyHashOf(policyId);
+    expect(await policyRegistry.ownerOf(policyId)).to.equal(attacker.address);
+    expect(await policyRegistry.agentOf(policyId)).to.equal(agentWallet.address);
+    expect(policyHash).to.not.equal(ethers.ZeroHash);
   });
 
   it("legitimate owner can create and use policy", async function () {
     const { registry, policyRegistry, guard, owner, agentWallet } = await loadFixture(deployFixture);
 
-    // Регистрируем агента
     const domain = {
       name: "AgentRegistry",
       version: "1",
@@ -77,48 +81,34 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
         { name: "metadataHash", type: "bytes32" },
       ],
     };
+    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("v1"));
     const sig = await agentWallet.signTypedData(domain, types, {
       agent: agentWallet.address,
       owner: owner.address,
-      metadataHash: ethers.keccak256(ethers.toUtf8Bytes("v1")),
+      metadataHash,
     });
-    await registry.register(agentWallet.address, owner.address, ethers.keccak256(ethers.toUtf8Bytes("v1")), sig);
+    await registry.register(agentWallet.address, owner.address, metadataHash, sig);
 
-    // Владелец создает политику
-    const salt = ethers.hexlify(ethers.randomBytes(32));
-    const targets = [guard.target];
-    const selectors = ["0x00000000"];
+    const salt = ethers.keccak256(ethers.toUtf8Bytes("owner-policy"));
     const maxTxValue = ethers.parseEther("1");
     const dailyLimit = ethers.parseEther("100");
     const approvalThreshold = ethers.parseEther("0.1");
 
-    await policyRegistry.connect(owner).createPolicy(
-      agentWallet.address,
+    const tx = await policyRegistry.connect(owner).createPolicy(
       salt,
-      targets,
-      selectors,
-      [],
+      agentWallet.address,
       maxTxValue,
       dailyLimit,
       approvalThreshold,
-      0,
-      ethers.MaxUint256
-    );
-
-    const policyHash = await policyRegistry.getPolicyHash(
-      agentWallet.address,
-      salt,
-      targets,
-      selectors,
+      0n,
+      4102444800n,
       [],
-      maxTxValue,
-      dailyLimit,
-      approvalThreshold,
-      0,
-      ethers.MaxUint256
+      [guard.target]
     );
+    await tx.wait();
+    const policyId = await policyRegistry.computePolicyId(owner.address, salt);
+    const policyHash = await policyRegistry.policyHashOf(policyId);
 
-    // Подписываем и исполняем
     const intentDomain = {
       name: "AgentExecutionGuard",
       version: "1",
@@ -141,10 +131,10 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
       agent: agentWallet.address,
       wallet: owner.address,
       target: guard.target,
-      value: 0,
+      value: 0n,
       calldataHash: ethers.keccak256("0x"),
-      nonce: 0,
-      deadline: ethers.MaxUint256,
+      nonce: 0n,
+      deadline: 4102444800n,
       policyHash,
     });
 
@@ -153,13 +143,13 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
         agentWallet.address,
         owner.address,
         guard.target,
-        0,
+        0n,
         "0x",
-        0,
-        ethers.MaxUint256,
+        0n,
+        4102444800n,
         policyHash,
         intentSig,
-        { value: 0 }
+        { value: 0n }
       )
     ).to.not.be.reverted;
   });
