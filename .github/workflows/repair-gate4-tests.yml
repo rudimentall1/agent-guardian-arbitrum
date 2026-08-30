@@ -1,7 +1,8 @@
 name: One-shot Gate 4 test repair
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ 'feat/gate4b-design' ]
 
 permissions:
   contents: write
@@ -28,38 +29,36 @@ jobs:
 
           g4a = Path('contracts-test/AgentExecutionGuard.gate4a.test.ts')
           s = g4a.read_text()
-          s = s.replace(
-              '  const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);\n',
-              '  const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);\n  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);\n  const coder = ethers.AbiCoder.defaultAbiCoder();\n  const POLICY_TYPES = ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"];\n'
-          )
+          if 'const CREATE_POLICY_SELECTOR' not in s:
+              s = s.replace(
+                  '  const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);\n',
+                  '  const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);\n  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);\n  const coder = ethers.AbiCoder.defaultAbiCoder();\n  const POLICY_TYPES = ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"];\n'
+              )
           old = '''    const tx = await policyRegistry.createPolicy(\n      salt,\n      agentAddress,\n      maxTxValue,\n      ethers.MaxUint128,\n      ethers.MaxUint128,\n      0n,\n      FAR_DEADLINE,\n      calls.map((call) => [call.target, call.selector]),\n      nativeTargets,\n    );\n    await tx.wait();'''
           new = '''    const payload = coder.encode(POLICY_TYPES, [\n      salt, agentAddress, maxTxValue, ethers.MaxUint128, ethers.MaxUint128,\n      0n, FAR_DEADLINE, calls.map((call) => [call.target, call.selector]), nativeTargets,\n    ]);\n    const tx = await owner.sendTransaction({\n      to: await policyRegistry.getAddress(),\n      data: ethers.concat([CREATE_POLICY_SELECTOR, payload]),\n    });\n    await tx.wait();'''
-          if old not in s:
-              raise SystemExit('Gate4A helper pattern not found')
-          s = s.replace(old, new, 1)
+          if old in s:
+              s = s.replace(old, new, 1)
           old2 = '''    await policyRegistry.createPolicy(\n      salt,\n      otherAgent.address,\n      ethers.parseEther("1"),\n      ethers.MaxUint128,\n      ethers.MaxUint128,\n      0n,\n      FAR_DEADLINE,\n      [[recordingTargetAddress, "0x00000000"]],\n      [recordingTargetAddress],\n    );'''
           new2 = '''    const otherPayload = coder.encode(POLICY_TYPES, [\n      salt, otherAgent.address, ethers.parseEther("1"), ethers.MaxUint128, ethers.MaxUint128,\n      0n, FAR_DEADLINE, [[recordingTargetAddress, "0x00000000"]], [recordingTargetAddress],\n    ]);\n    const otherTx = await owner.sendTransaction({\n      to: await policyRegistry.getAddress(),\n      data: ethers.concat([CREATE_POLICY_SELECTOR, otherPayload]),\n    });\n    await otherTx.wait();'''
-          if old2 not in s:
-              raise SystemExit('Gate4A other-agent pattern not found')
-          s = s.replace(old2, new2, 1)
+          if old2 in s:
+              s = s.replace(old2, new2, 1)
           g4a.write_text(s)
 
           g4b = Path('contracts-test/AgentExecutionGuard.gate4b.test.ts')
           s = g4b.read_text()
-          s = s.replace(
-              '  const ZERO_SELECTOR = "0x00000000";\n',
-              '  const ZERO_SELECTOR = "0x00000000";\n  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0,10);\n  const POLICY_TYPES = ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"];\n  const coder = ethers.AbiCoder.defaultAbiCoder();\n'
-          )
+          if 'const CREATE_POLICY_SELECTOR' not in s:
+              s = s.replace(
+                  '  const ZERO_SELECTOR = "0x00000000";\n',
+                  '  const ZERO_SELECTOR = "0x00000000";\n  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0,10);\n  const POLICY_TYPES = ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"];\n  const coder = ethers.AbiCoder.defaultAbiCoder();\n'
+              )
           old = '''    const tx = await policyRegistry.createPolicy(\n      salt,\n      agentAddress,\n      maxTxValue,\n      dailyLimit,\n      approvalThreshold,\n      0n,\n      DEADLINE,\n      [[targetAddress, ZERO_SELECTOR]],\n      [targetAddress],\n    );\n    await tx.wait();'''
           new = '''    const payload = coder.encode(POLICY_TYPES, [\n      salt, agentAddress, maxTxValue, dailyLimit, approvalThreshold,\n      0n, DEADLINE, [[targetAddress, ZERO_SELECTOR]], [targetAddress],\n    ]);\n    const tx = await owner.sendTransaction({\n      to: await policyRegistry.getAddress(),\n      data: ethers.concat([CREATE_POLICY_SELECTOR, payload]),\n    });\n    await tx.wait();'''
-          if old not in s:
-              raise SystemExit('Gate4B helper pattern not found')
-          s = s.replace(old, new, 1)
+          if old in s:
+              s = s.replace(old, new, 1)
           old2 = '''      const tx = await policyRegistry.createPolicy(\n        salt,\n        agentAddress,\n        ethers.parseEther("1"),\n        ethers.parseEther("1"),\n        ethers.MaxUint128,\n        0n,\n        DEADLINE,\n        [[ra, ZERO_SELECTOR]],\n        [ra],\n      );\n      await tx.wait();'''
           new2 = '''      const payload = coder.encode(POLICY_TYPES, [\n        salt, agentAddress, ethers.parseEther("1"), ethers.parseEther("1"), ethers.MaxUint128,\n        0n, DEADLINE, [[ra, ZERO_SELECTOR]], [ra],\n      ]);\n      const tx = await owner.sendTransaction({\n        to: await policyRegistry.getAddress(),\n        data: ethers.concat([CREATE_POLICY_SELECTOR, payload]),\n      });\n      await tx.wait();'''
-          if old2 not in s:
-              raise SystemExit('Gate4B reverter pattern not found')
-          s = s.replace(old2, new2, 1)
+          if old2 in s:
+              s = s.replace(old2, new2, 1)
           s = s.replace('to.be.revertedWithCustomError(guard,"InvalidIntentSignature")', 'to.be.revertedWithCustomError(guard,"InvalidSignature")')
           g4b.write_text(s)
           PY
