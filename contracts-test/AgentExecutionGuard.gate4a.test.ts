@@ -78,10 +78,10 @@ describe("Gate 4A: call authorization (target+selector, maxTxValue) — full sta
       forAgent,
       opts.maxTxValue ?? ethers.parseEther("1"),
       ethers.MaxUint128,
-      ethers.parseEther("50"),
+      ethers.MaxUint128,
       opts.validFrom ?? 0n,
       opts.validUntil ?? FAR_DEADLINE,
-      (opts.calls ?? []).map(({ target, selector }) => [target, selector]),
+      opts.calls ?? [],
       opts.nativeTransferTargets ?? []
     );
     await tx.wait();
