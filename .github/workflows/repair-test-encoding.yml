@@ -23,19 +23,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # Gate 4A: use literal ABI tuple objects plus deterministic selectors.
           p = Path('contracts-test/AgentExecutionGuard.gate4a.test.ts')
           s = p.read_text()
-          s = s.replace('''const fooSel = selectorTarget.interface.getFunction("foo")!.selector;''', '''const fooSel = ethers.id("foo(uint256)").slice(0, 10);''')
-          s = s.replace('''const barSel = selectorTarget.interface.getFunction("bar")!.selector;''', '''const barSel = ethers.id("bar(address)").slice(0, 10);''')
-          s = s.replace('''const barSel = otherTarget.interface.getFunction("bar")!.selector;''', '''const barSel = ethers.id("bar(address)").slice(0, 10);''')
-          s = s.replace('''selector: attacker.interface.getFunction("attack")!.selector''', '''selector: "0xaaaaaaaa"''')
-          s = s.replace('''const data = attacker.interface.encodeFunctionData("attack");''', '''const data = "0xaaaaaaaa";''')
+          s = s.replace('const fooSel = selectorTarget.interface.getFunction("foo")!.selector;', 'const fooSel = ethers.id("foo(uint256)").slice(0, 10);')
+          s = s.replace('const barSel = selectorTarget.interface.getFunction("bar")!.selector;', 'const barSel = ethers.id("bar(address)").slice(0, 10);')
+          s = s.replace('const barSel = otherTarget.interface.getFunction("bar")!.selector;', 'const barSel = ethers.id("bar(address)").slice(0, 10);')
+          s = s.replace('selector: attacker.interface.getFunction("attack")!.selector', 'selector: "0xaaaaaaaa"')
+          s = s.replace('const data = attacker.interface.encodeFunctionData("attack");', 'const data = "0xaaaaaaaa";')
           p.write_text(s)
 
-          # Gate 4B: avoid the empty tuple-array edge case entirely. Native-transfer
-          # authorization is still explicit; the extra 0x00000000 call permission
-          # is inert for all Gate 4B calldata (the suite uses empty calldata only).
           p = Path('contracts-test/AgentExecutionGuard.gate4b.test.ts')
           s = p.read_text()
           old = '''    const encoded = policyRegistry.interface.encodeFunctionData("createPolicy", [
@@ -68,11 +64,10 @@ jobs:
           if old not in s:
               raise SystemExit('Gate 4B encoding helper pattern not found')
           p.write_text(s.replace(old, new, 1))
-
           PY
-
           rm -rf typechain-types artifacts cache
-          git add contracts-test/AgentExecutionGuard.gate4a.test.ts contracts-test/AgentExecutionGuard.gate4b.test.ts .github/workflows/repair-test-encoding.yml
+          git add contracts-test/AgentExecutionGuard.gate4a.test.ts contracts-test/AgentExecutionGuard.gate4b.test.ts
+          git rm -f .github/workflows/repair-test-encoding.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "test: stabilize gate4 tests"
