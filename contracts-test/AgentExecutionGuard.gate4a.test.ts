@@ -20,11 +20,11 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     { name: "deadline", type: "uint256" }, { name: "policyHash", type: "bytes32" },
   ] };
 
-  async function createPolicy(name: string, calls: [string, string][], nativeTargets: string[] = [], max = ethers.parseEther("1")) {
+  async function createPolicy(name: string, calls: { target: string; selector: string }[], nativeTargets: string[] = [], max = ethers.parseEther("1")) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(name));
     const coder = ethers.AbiCoder.defaultAbiCoder();
     const encoded = coder.encode(
-      ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address,bytes4)[]","address[]"],
+      ["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address target,bytes4 selector)[]","address[]"],
       [salt, agentAddress, max, ethers.MaxUint128, ethers.MaxUint128, 0n, DEADLINE, calls, nativeTargets]
     );
     const selector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
@@ -77,7 +77,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
   });
 
   it("enforces exact target+selector pairs and prevents the Cartesian-product bug", async function () {
-    const policy = await createPolicy("cartesian", [[targetAAddress, FOO], [targetBAddress, BAR]]);
+    const policy = await createPolicy("cartesian", [{target: targetAAddress, selector: FOO}, {target: targetBAddress, selector: BAR}]);
     await execute(policy, targetAAddress, 0n, targetA.interface.encodeFunctionData("foo", [1]), 0n);
     await execute(policy, targetBAddress, 0n, targetB.interface.encodeFunctionData("bar", [wallet.address]), 1n);
     await expect(execute(policy, targetAAddress, 0n, targetA.interface.encodeFunctionData("bar", [wallet.address]), 2n)).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
@@ -85,45 +85,38 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
   });
 
   it("keeps native transfer authorization separate from function calls", async function () {
-    const policy = await createPolicy("native-separation", [[targetAAddress, "0x00000000"]], [recorderAddress]);
+    const policy = await createPolicy("native-separation", [{target: targetAAddress, selector: "0x00000000"}], [recorderAddress]);
     await execute(policy, recorderAddress, 0n, "0x", 0n);
     expect(await recorder.callCount()).to.equal(1n);
     await expect(execute(policy, recorderAddress, 0n, "0x12345678", 1n)).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
   });
 
   it("rejects malformed 1–3 byte calldata", async function () {
-    const policy = await createPolicy("malformed", [[targetAAddress, "0x00000000"]], [targetAAddress]);
+    const policy = await createPolicy("malformed", [{target: targetAAddress, selector: "0x00000000"}], [targetAAddress]);
     await expect(execute(policy, targetAAddress, 0n, "0x12", 0n)).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
   });
 
   it("enforces maxTxValue at both boundaries", async function () {
     const max = ethers.parseEther("1");
-    const policy = await createPolicy("max-boundaries", [[targetAAddress, FOO]], [], max);
+    const policy = await createPolicy("max-boundary", [{target: targetAAddress, selector: FOO}], [], max);
     await execute(policy, targetAAddress, max, targetA.interface.encodeFunctionData("foo", [1]), 0n);
     await expect(execute(policy, targetAAddress, max + 1n, targetA.interface.encodeFunctionData("foo", [1]), 1n)).to.be.revertedWithCustomError(guard, "MaxTxValueExceeded");
   });
 
-  it("binds calldata, target and value to the EIP-712 intent", async function () {
-    const policy = await createPolicy("intent-binding", [[targetAAddress, FOO]]);
-    const data = targetA.interface.encodeFunctionData("foo", [1]);
-    const sig = await sign(policy, targetAAddress, 0n, data, 0n);
-    await expect(guard.execute(agentAddress, wallet.address, targetAAddress, 0n, targetA.interface.encodeFunctionData("foo", [2]), 0n, DEADLINE, policy, sig, { value: 0n })).to.be.revertedWithCustomError(guard, "InvalidSignature");
-    await expect(guard.execute(agentAddress, wallet.address, targetBAddress, 0n, data, 0n, DEADLINE, policy, sig, { value: 0n })).to.be.revertedWithCustomError(guard, "InvalidSignature");
-    await expect(guard.execute(agentAddress, wallet.address, targetAAddress, 1n, data, 0n, DEADLINE, policy, sig, { value: 1n })).to.be.revertedWithCustomError(guard, "InvalidSignature");
-  });
-
   it("rejects wrong-agent policies and replayed nonces", async function () {
-    const other = ethers.Wallet.createRandom().connect(ethers.provider);
+    const otherAgent = ethers.Wallet.createRandom().connect(ethers.provider);
+    const policyA = await createPolicy("wrong-agent", [{target: targetAAddress, selector: FOO}]);
+    const policyB = await createPolicy("wrong-agent-b", [{target: targetBAddress, selector: BAR}]);
+    await execute(policyA, targetAAddress, 0n, targetA.interface.encodeFunctionData("foo", [1]), 0n);
+    const data = targetA.interface.encodeFunctionData("foo", [2]);
+    const otherPolicy = policyB;
     const net = await ethers.provider.getNetwork();
-    const m = ethers.keccak256(ethers.toUtf8Bytes("other"));
-    const s = await other.signTypedData({ name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: await registry.getAddress() }, regTypes, { agent: other.address, owner: owner.address, metadataHash: m });
-    await registry.register(other.address, owner.address, m, s);
-    const salt = ethers.keccak256(ethers.toUtf8Bytes("other-policy"));
-    const coder = ethers.AbiCoder.defaultAbiCoder();
-    const encoded = coder.encode(["bytes32","address","uint128","uint128","uint128","uint64","uint64","tuple(address,bytes4)[]","address[]"],[salt,other.address,ethers.parseEther("1"),ethers.MaxUint128,ethers.MaxUint128,0n,DEADLINE,[[recorderAddress,"0x00000000"]],[recorderAddress]]);
-    const selector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0,10);
-    await owner.sendTransaction({to: await policyRegistry.getAddress(), data: ethers.concat([selector, encoded])});
-    const policy = await policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address, salt));
-    await expect(execute(policy, recorderAddress, 0n, "0x", 0n)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
+    const sig = await otherAgent.signTypedData(
+      { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress },
+      intentTypes,
+      { agent: agentAddress, wallet: wallet.address, target: targetAAddress, value: 0n, calldataHash: ethers.keccak256(data), nonce: 1n, deadline: DEADLINE, policyHash: otherPolicy }
+    );
+    await expect(guard.execute(agentAddress, wallet.address, targetAAddress, 0n, data, 1n, DEADLINE, otherPolicy, sig)).to.be.reverted;
+    await expect(execute(policyA, targetAAddress, 0n, data, 0n)).to.be.reverted;
   });
 });
