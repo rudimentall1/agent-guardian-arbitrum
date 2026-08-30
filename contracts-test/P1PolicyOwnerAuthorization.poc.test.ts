@@ -19,7 +19,11 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
     const guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
     await guard.waitForDeployment();
 
-    return { registry, policyRegistry, guard, owner, attacker, agentWallet };
+    const RecordingTarget = await ethers.getContractFactory("RecordingTarget");
+    const recordingTarget = await RecordingTarget.deploy();
+    await recordingTarget.waitForDeployment();
+
+    return { registry, policyRegistry, guard, owner, attacker, agentWallet, recordingTarget };
   }
 
   async function register(
@@ -127,9 +131,10 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
   });
 
   it("legitimate owner can create and use policy", async function () {
-    const { registry, policyRegistry, guard, owner, agentWallet } = await loadFixture(deployFixture);
+    const { registry, policyRegistry, guard, owner, agentWallet, recordingTarget } = await loadFixture(deployFixture);
     await register(registry, agentWallet, owner);
 
+    const target = await recordingTarget.getAddress();
     const salt = ethers.keccak256(ethers.toUtf8Bytes("owner-policy"));
     const maxTxValue = ethers.parseEther("1");
     const dailyLimit = ethers.parseEther("100");
@@ -144,18 +149,18 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
       0n,
       4102444800n,
       [],
-      [guard.target]
+      [target]
     );
 
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
     const policyHash = await policyRegistry.policyHashOf(policyId);
-    const intentSig = await signIntent(guard, agentWallet, owner.address, guard.target, 0n, policyHash);
+    const intentSig = await signIntent(guard, agentWallet, owner.address, target, 0n, policyHash);
 
     await expect(
       guard.connect(owner).execute(
         agentWallet.address,
         owner.address,
-        guard.target,
+        target,
         0n,
         "0x",
         0n,
@@ -167,5 +172,6 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
     ).to.not.be.reverted;
 
     expect(await guard.nextNonce(agentWallet.address)).to.equal(1n);
+    expect(await recordingTarget.callCount()).to.equal(1n);
   });
 });
