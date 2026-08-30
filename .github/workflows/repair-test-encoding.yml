@@ -1,9 +1,9 @@
-name: Repair test encoding
+name: disabled-repair
 
 on: workflow_dispatch
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   noop:
