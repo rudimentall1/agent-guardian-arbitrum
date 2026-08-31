@@ -21,6 +21,12 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
   const FAR_DEADLINE = 4102444800n;
   const FOO_SELECTOR = ethers.id("foo(uint256)").slice(0, 10);
   const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);
+  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const POLICY_TYPES = [
+    "bytes32", "address", "uint128", "uint128", "uint128", "uint64", "uint64",
+    "tuple(address target,bytes4 selector)[]", "address[]"
+  ];
 
   const registrationTypes = {
     AgentRegistration: [
@@ -60,6 +66,33 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     await agentRegistry.register(agentAddress, owner.address, metadataHash, sig);
   }
 
+  async function sendCreatePolicy(
+    salt: string,
+    policyAgent: string,
+    maxTxValue: bigint,
+    dailyLimit: bigint,
+    approvalThreshold: bigint,
+    calls: { target: string; selector: string }[],
+    nativeTargets: string[]
+  ) {
+    const payload = coder.encode(POLICY_TYPES, [
+      salt,
+      policyAgent,
+      maxTxValue,
+      dailyLimit,
+      approvalThreshold,
+      0n,
+      FAR_DEADLINE,
+      calls.map((call) => [call.target, call.selector]),
+      nativeTargets,
+    ]);
+    const tx = await owner.sendTransaction({
+      to: await policyRegistry.getAddress(),
+      data: ethers.concat([CREATE_POLICY_SELECTOR, payload]),
+    });
+    await tx.wait();
+  }
+
   async function createPolicy(
     saltText: string,
     calls: { target: string; selector: string }[],
@@ -67,18 +100,15 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     maxTxValue = ethers.parseEther("1")
   ) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(saltText));
-    const tx = await policyRegistry.createPolicy(
+    await sendCreatePolicy(
       salt,
       agentAddress,
       maxTxValue,
       ethers.MaxUint128,
       ethers.MaxUint128,
-      0n,
-      FAR_DEADLINE,
-      calls.map((call) => [call.target, call.selector]),
+      calls,
       nativeTargets,
     );
-    await tx.wait();
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
     return await policyRegistry.policyHashOf(policyId);
   }
@@ -249,15 +279,13 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     await agentRegistry.register(otherAgent.address, owner.address, metadataHash, sig);
 
     const salt = ethers.keccak256(ethers.toUtf8Bytes("other-policy"));
-    await policyRegistry.createPolicy(
+    await sendCreatePolicy(
       salt,
       otherAgent.address,
       ethers.parseEther("1"),
       ethers.MaxUint128,
       ethers.MaxUint128,
-      0n,
-      FAR_DEADLINE,
-      [[recordingTargetAddress, "0x00000000"]],
+      [{ target: recordingTargetAddress, selector: "0x00000000" }],
       [recordingTargetAddress],
     );
     const id = await policyRegistry.computePolicyId(owner.address, salt);
