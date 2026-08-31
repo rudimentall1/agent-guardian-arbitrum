@@ -157,7 +157,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const attacker = ethers.Wallet.createRandom().connect(ethers.provider);
       const net = await ethers.provider.getNetwork();
       const approval = await attacker.signTypedData({name:"AgentExecutionGuard",version:"1",chainId:net.chainId,verifyingContract:guardAddress},approvalTypes,
-        {agent:agentAddress,wallet:wallet.address,target:targetAddress,value:1n,calldataHash:ethers.keccak256("0x"),nonce:0n,deadline:DEADLINE,policyHash,approvalDeadline:DEADLINE});
+        {agent:agentAddress,wallet:wallet.address,target:targetAddress,value:1n,calldataHash:ethers.keccak256("0x"),nonce:0n,deadline:DEADLINE,policyHash:policy,approvalDeadline:DEADLINE});
       const intent = await signIntent(policy,1n,0n);
       await expect(executeWithApproval(policy,1n,0n,DEADLINE,DEADLINE,"0x",intent,approval)).to.be.revertedWithCustomError(guard,"InvalidApprovalSignature");
     });
