@@ -60,7 +60,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     calls: { target: string; selector: string }[],
     nativeTargets: string[]
   ) {
-    const data = policyRegistry.interface.encodeFunctionData("createPolicy", [
+    const tx = await policyRegistry.connect(owner).createPolicy(
       salt,
       policyAgent,
       maxTxValue,
@@ -70,8 +70,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
       FAR_DEADLINE,
       calls,
       nativeTargets,
-    ]);
-    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
+    );
     await tx.wait();
   }
 
