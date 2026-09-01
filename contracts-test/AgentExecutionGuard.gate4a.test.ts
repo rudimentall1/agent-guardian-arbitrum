@@ -21,9 +21,6 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
   const FAR_DEADLINE = 4102444800n;
   const FOO_SELECTOR = ethers.id("foo(uint256)").slice(0, 10);
   const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);
-  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const POLICY_TYPES = ["bytes32","address","uint128","uint128","uint128","uint64","uint64","(address,bytes4)[]","address[]"];
 
   const registrationTypes = {
     AgentRegistration: [
@@ -54,13 +51,36 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     await agentRegistry.register(agentAddress, owner.address, metadataHash, sig);
   }
 
-  async function sendCreatePolicy(salt: string, policyAgent: string, maxTxValue: bigint, dailyLimit: bigint, approvalThreshold: bigint, calls: { target: string; selector: string }[], nativeTargets: string[]) {
-    const payload = coder.encode(POLICY_TYPES, [salt, policyAgent, maxTxValue, dailyLimit, approvalThreshold, 0n, FAR_DEADLINE, calls.map((call) => [call.target, call.selector]), nativeTargets]);
-    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data: ethers.concat([CREATE_POLICY_SELECTOR, payload]) });
+  async function sendCreatePolicy(
+    salt: string,
+    policyAgent: string,
+    maxTxValue: bigint,
+    dailyLimit: bigint,
+    approvalThreshold: bigint,
+    calls: { target: string; selector: string }[],
+    nativeTargets: string[]
+  ) {
+    const data = policyRegistry.interface.encodeFunctionData("createPolicy", [
+      salt,
+      policyAgent,
+      maxTxValue,
+      dailyLimit,
+      approvalThreshold,
+      0n,
+      FAR_DEADLINE,
+      calls.map((call) => [call.target, call.selector]),
+      nativeTargets,
+    ]);
+    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
     await tx.wait();
   }
 
-  async function createPolicy(saltText: string, calls: { target: string; selector: string }[], nativeTargets: string[] = [], maxTxValue = ethers.parseEther("1")) {
+  async function createPolicy(
+    saltText: string,
+    calls: { target: string; selector: string }[],
+    nativeTargets: string[] = [],
+    maxTxValue = ethers.parseEther("1")
+  ) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(saltText));
     await sendCreatePolicy(salt, agentAddress, maxTxValue, ethers.MaxUint128, ethers.MaxUint128, calls, nativeTargets);
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
