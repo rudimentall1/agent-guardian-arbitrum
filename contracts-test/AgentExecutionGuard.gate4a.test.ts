@@ -19,6 +19,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
   let guardAddress: string;
 
   const FAR_DEADLINE = 4102444800n;
+  const MAX_UINT128 = (1n << 128n) - 1n;
   const FOO_SELECTOR = ethers.id("foo(uint256)").slice(0, 10);
   const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);
 
@@ -58,9 +59,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     nativeTargets: string[],
   ) {
     const selector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
-
-    // createPolicy has 10 parameters; the two dynamic arrays occupy the last two head words.
-    const staticHeadWords = 10n;
+    const staticHeadWords = 9n;
     const callsTail = [uintWord(BigInt(calls.length)), ...calls.flatMap((call) => [addressWord(call.target), bytes4Word(call.selector)])];
     const nativeTail = [uintWord(BigInt(nativeTargets.length)), ...nativeTargets.map(addressWord)];
     const callsOffset = staticHeadWords * 32n;
@@ -111,7 +110,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     maxTxValue = ethers.parseEther("1")
   ) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(saltText));
-    await sendCreatePolicy(salt, agentAddress, maxTxValue, ethers.MaxUint128, ethers.MaxUint128, calls, nativeTargets);
+    await sendCreatePolicy(salt, agentAddress, maxTxValue, MAX_UINT128, MAX_UINT128, calls, nativeTargets);
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
     return await policyRegistry.policyHashOf(policyId);
   }
@@ -194,7 +193,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     const sig = await otherAgent.signTypedData({ name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: await agentRegistry.getAddress() }, registrationTypes, { agent: otherAgent.address, owner: owner.address, metadataHash });
     await agentRegistry.register(otherAgent.address, owner.address, metadataHash, sig);
     const salt = ethers.keccak256(ethers.toUtf8Bytes("other-policy"));
-    await sendCreatePolicy(salt, otherAgent.address, ethers.parseEther("1"), ethers.MaxUint128, ethers.MaxUint128, [{ target: recordingTargetAddress, selector: "0x00000000" }], [recordingTargetAddress]);
+    await sendCreatePolicy(salt, otherAgent.address, ethers.parseEther("1"), MAX_UINT128, MAX_UINT128, [{ target: recordingTargetAddress, selector: "0x00000000" }], [recordingTargetAddress]);
     const id = await policyRegistry.computePolicyId(owner.address, salt);
     const policy = await policyRegistry.policyHashOf(id);
     await expect(execute(policy, recordingTargetAddress, 0n, "0x", 0n)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
