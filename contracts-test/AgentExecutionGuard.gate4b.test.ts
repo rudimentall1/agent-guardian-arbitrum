@@ -23,6 +23,9 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     { name: "value", type: "uint256" }, { name: "calldataHash", type: "bytes32" }, { name: "nonce", type: "uint256" },
     { name: "deadline", type: "uint256" }, { name: "policyHash", type: "bytes32" }, { name: "approvalDeadline", type: "uint256" },
   ] };
+  const policyCreateInterface = new ethers.Interface([
+    "function createPolicy(bytes32 salt,address agent,uint128 maxTxValue,uint128 dailyLimit,uint128 approvalThreshold,uint64 validFrom,uint64 validUntil,tuple(address target,bytes4 selector)[] calls,address[] nativeTransferTargets)"
+  ]);
 
   async function sendCreatePolicy(
     salt: string,
@@ -33,7 +36,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     calls: { target: string; selector: string }[],
     nativeTargets: string[],
   ) {
-    const tx = await policyRegistry.connect(owner).createPolicy(
+    const data = policyCreateInterface.encodeFunctionData("createPolicy", [
       salt,
       policyAgent,
       maxTxValue,
@@ -43,7 +46,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       DEADLINE,
       calls,
       nativeTargets,
-    );
+    ]);
+    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
     await tx.wait();
   }
 
@@ -120,8 +124,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       const salt = ethers.keccak256(ethers.toUtf8Bytes("reverter"));
       await sendCreatePolicy(salt, agentAddress, ethers.parseEther("1"), ethers.parseEther("1"), ethers.MaxUint128, [{target: ra, selector: ZERO_SELECTOR}], [ra]);
       const policy = await policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address, salt));
-      const net = await ethers.provider.getNetwork();
-      const sig = await agent.signTypedData({name:"AgentExecutionGuard",version:"1",chainId:net.chainId,verifyingContract:guardAddress},intentTypes,
+      const sig = await agent.signTypedData({name:"AgentExecutionGuard",version:"1",chainId:(await ethers.provider.getNetwork()).chainId,verifyingContract:guardAddress},intentTypes,
         {agent:agentAddress,wallet:wallet.address,target:ra,value:ethers.parseEther("0.5"),calldataHash:ethers.keccak256("0x"),nonce:0n,deadline:DEADLINE,policyHash:policy});
       await expect(guard.execute(agentAddress,wallet.address,ra,ethers.parseEther("0.5"),"0x",0n,DEADLINE,policy,sig,{value:ethers.parseEther("0.5")})).to.be.revertedWithCustomError(guard,"ExecutionFailed");
       expect((await guard.dailySpend(policy)).spent).to.equal(0n);
