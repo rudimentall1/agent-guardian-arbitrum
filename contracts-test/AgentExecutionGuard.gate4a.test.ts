@@ -68,7 +68,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
       approvalThreshold,
       0n,
       FAR_DEADLINE,
-      calls.map((call) => [call.target, call.selector]),
+      calls,
       nativeTargets,
     ]);
     const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
