@@ -23,9 +23,41 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     { name: "value", type: "uint256" }, { name: "calldataHash", type: "bytes32" }, { name: "nonce", type: "uint256" },
     { name: "deadline", type: "uint256" }, { name: "policyHash", type: "bytes32" }, { name: "approvalDeadline", type: "uint256" },
   ] };
-  const policyCreateInterface = new ethers.Interface([
-    "function createPolicy(bytes32 salt,address agent,uint128 maxTxValue,uint128 dailyLimit,uint128 approvalThreshold,uint64 validFrom,uint64 validUntil,tuple(address target,bytes4 selector)[] calls,address[] nativeTransferTargets)"
-  ]);
+
+  const word = (value: bigint) => ethers.zeroPadValue(ethers.toBeHex(value), 32);
+  const addressWord = (value: string) => ethers.zeroPadValue(value, 32);
+  const bytes4Word = (value: string) => ethers.zeroPadBytes(value, 32);
+
+  function encodeCreatePolicy(
+    salt: string,
+    policyAgent: string,
+    maxTxValue: bigint,
+    dailyLimit: bigint,
+    approvalThreshold: bigint,
+    calls: { target: string; selector: string }[],
+    nativeTargets: string[],
+  ) {
+    const fnSelector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
+    const staticHeadWords = 9n;
+    const callsTail = [word(BigInt(calls.length)), ...calls.flatMap((call) => [addressWord(call.target), bytes4Word(call.selector)])];
+    const nativeTail = [word(BigInt(nativeTargets.length)), ...nativeTargets.map(addressWord)];
+    const callsOffset = staticHeadWords * 32n;
+    const nativeOffset = callsOffset + BigInt(callsTail.length * 32);
+    return ethers.concat([
+      fnSelector,
+      salt,
+      addressWord(policyAgent),
+      word(maxTxValue),
+      word(dailyLimit),
+      word(approvalThreshold),
+      word(0n),
+      word(DEADLINE),
+      word(callsOffset),
+      word(nativeOffset),
+      ...callsTail,
+      ...nativeTail,
+    ]);
+  }
 
   async function sendCreatePolicy(
     salt: string,
@@ -36,17 +68,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     calls: { target: string; selector: string }[],
     nativeTargets: string[],
   ) {
-    const data = policyCreateInterface.encodeFunctionData("createPolicy", [
-      salt,
-      policyAgent,
-      maxTxValue,
-      dailyLimit,
-      approvalThreshold,
-      0n,
-      DEADLINE,
-      calls,
-      nativeTargets,
-    ]);
+    const data = encodeCreatePolicy(salt, policyAgent, maxTxValue, dailyLimit, approvalThreshold, calls, nativeTargets);
     const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
     await tx.wait();
   }
