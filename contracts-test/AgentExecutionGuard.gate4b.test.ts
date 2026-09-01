@@ -33,7 +33,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     calls: { target: string; selector: string }[],
     nativeTargets: string[],
   ) {
-    const data = policyRegistry.interface.encodeFunctionData("createPolicy", [
+    const tx = await policyRegistry.connect(owner).createPolicy(
       salt,
       policyAgent,
       maxTxValue,
@@ -43,8 +43,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       DEADLINE,
       calls,
       nativeTargets,
-    ]);
-    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
+    );
     await tx.wait();
   }
 
