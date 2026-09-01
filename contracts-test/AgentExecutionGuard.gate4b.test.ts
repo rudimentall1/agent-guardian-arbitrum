@@ -30,7 +30,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     maxTxValue: bigint,
     dailyLimit: bigint,
     approvalThreshold: bigint,
-    calls: [string, string][],
+    calls: { target: string; selector: string }[],
     nativeTargets: string[],
   ) {
     const data = policyRegistry.interface.encodeFunctionData("createPolicy", [
@@ -48,7 +48,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     await tx.wait();
   }
 
-  async function createPolicy(dailyLimit: bigint, approvalThreshold: bigint, maxTxValue = ethers.parseEther("100"), calls: [string,string][] = [[targetAddress, ZERO_SELECTOR]], nativeTargets: string[] = [targetAddress]) {
+  async function createPolicy(dailyLimit: bigint, approvalThreshold: bigint, maxTxValue = ethers.parseEther("100"), calls: {target: string; selector: string}[] = [{target: targetAddress, selector: ZERO_SELECTOR}], nativeTargets: string[] = [targetAddress]) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(`${dailyLimit}-${approvalThreshold}-${maxTxValue}-${Date.now()}-${Math.random()}`));
     await sendCreatePolicy(salt, agentAddress, maxTxValue, dailyLimit, approvalThreshold, calls, nativeTargets);
     return policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address, salt));
@@ -119,7 +119,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await reverter.waitForDeployment();
       const ra = await reverter.getAddress();
       const salt = ethers.keccak256(ethers.toUtf8Bytes("reverter"));
-      await sendCreatePolicy(salt, agentAddress, ethers.parseEther("1"), ethers.parseEther("1"), ethers.MaxUint128, [[ra, ZERO_SELECTOR]], [ra]);
+      await sendCreatePolicy(salt, agentAddress, ethers.parseEther("1"), ethers.parseEther("1"), ethers.MaxUint128, [{target: ra, selector: ZERO_SELECTOR}], [ra]);
       const policy = await policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address, salt));
       const net = await ethers.provider.getNetwork();
       const sig = await agent.signTypedData({name:"AgentExecutionGuard",version:"1",chainId:net.chainId,verifyingContract:guardAddress},intentTypes,
@@ -154,7 +154,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await expect(executeWithApproval(policy,1n,0n,DEADLINE,DEADLINE,"0x",intent,approval)).to.be.revertedWithCustomError(guard,"InvalidApprovalSignature");
     });
     it("rejects an approval replayed with altered calldata", async function () {
-      const policy = await createPolicy(ethers.parseEther("10"), 0n, ethers.parseEther("100"), [[targetAddress, ZERO_SELECTOR], [targetAddress, ALTERED_SELECTOR]], [targetAddress]);
+      const policy = await createPolicy(ethers.parseEther("10"), 0n, ethers.parseEther("100"), [{target: targetAddress, selector: ZERO_SELECTOR}, {target: targetAddress, selector: ALTERED_SELECTOR}], [targetAddress]);
       const approval = await signApproval(policy, 1n, 0n, DEADLINE, DEADLINE, "0x");
       const alteredIntent = await signIntent(policy, 1n, 0n, DEADLINE, ALTERED_SELECTOR);
       await expect(executeWithApproval(policy, 1n, 0n, DEADLINE, DEADLINE, ALTERED_SELECTOR, alteredIntent, approval)).to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
