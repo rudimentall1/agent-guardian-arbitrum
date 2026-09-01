@@ -24,9 +24,10 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     { name: "deadline", type: "uint256" }, { name: "policyHash", type: "bytes32" }, { name: "approvalDeadline", type: "uint256" },
   ] };
 
-  const word = (value: bigint) => ethers.zeroPadValue(ethers.toBeHex(value), 32);
-  const addressWord = (value: string) => ethers.zeroPadValue(value, 32);
-  const bytes4Word = (value: string) => ethers.zeroPadBytes(value, 32);
+  const uintWord = (value: bigint) => `0x${value.toString(16).padStart(64, "0")}`;
+  const bytes32Word = (value: string) => `0x${value.slice(2).padStart(64, "0")}`;
+  const addressWord = (value: string) => `0x${value.slice(2).padStart(64, "0")}`;
+  const bytes4Word = (value: string) => `0x${value.slice(2).padEnd(64, "0")}`;
 
   function encodeCreatePolicy(
     salt: string,
@@ -38,22 +39,23 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     nativeTargets: string[],
   ) {
     const fnSelector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
-    const staticHeadWords = 9n;
-    const callsTail = [word(BigInt(calls.length)), ...calls.flatMap((call) => [addressWord(call.target), bytes4Word(call.selector)])];
-    const nativeTail = [word(BigInt(nativeTargets.length)), ...nativeTargets.map(addressWord)];
+    // 10 parameters => 10 words in the ABI head. The last two words are offsets to dynamic arrays.
+    const staticHeadWords = 10n;
+    const callsTail = [uintWord(BigInt(calls.length)), ...calls.flatMap((call) => [addressWord(call.target), bytes4Word(call.selector)])];
+    const nativeTail = [uintWord(BigInt(nativeTargets.length)), ...nativeTargets.map(addressWord)];
     const callsOffset = staticHeadWords * 32n;
     const nativeOffset = callsOffset + BigInt(callsTail.length * 32);
     return ethers.concat([
       fnSelector,
-      salt,
+      bytes32Word(salt),
       addressWord(policyAgent),
-      word(maxTxValue),
-      word(dailyLimit),
-      word(approvalThreshold),
-      word(0n),
-      word(DEADLINE),
-      word(callsOffset),
-      word(nativeOffset),
+      uintWord(maxTxValue),
+      uintWord(dailyLimit),
+      uintWord(approvalThreshold),
+      uintWord(0n),
+      uintWord(DEADLINE),
+      uintWord(callsOffset),
+      uintWord(nativeOffset),
       ...callsTail,
       ...nativeTail,
     ]);
