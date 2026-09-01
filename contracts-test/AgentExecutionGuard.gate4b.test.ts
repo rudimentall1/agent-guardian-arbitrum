@@ -10,9 +10,6 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
   const DEADLINE = 4102444800n;
   const ZERO_SELECTOR = "0x00000000";
   const ALTERED_SELECTOR = "0x12345678";
-  const CREATE_POLICY_SELECTOR = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-  const POLICY_TYPES = ["bytes32","address","uint128","uint128","uint128","uint64","uint64","(address,bytes4)[]","address[]"];
   const regTypes = { AgentRegistration: [
     { name: "agent", type: "address" }, { name: "owner", type: "address" }, { name: "metadataHash", type: "bytes32" },
   ] };
@@ -36,8 +33,18 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     calls: [string, string][],
     nativeTargets: string[],
   ) {
-    const payload = coder.encode(POLICY_TYPES, [salt, policyAgent, maxTxValue, dailyLimit, approvalThreshold, 0n, DEADLINE, calls, nativeTargets]);
-    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data: ethers.concat([CREATE_POLICY_SELECTOR, payload]) });
+    const data = policyRegistry.interface.encodeFunctionData("createPolicy", [
+      salt,
+      policyAgent,
+      maxTxValue,
+      dailyLimit,
+      approvalThreshold,
+      0n,
+      DEADLINE,
+      calls,
+      nativeTargets,
+    ]);
+    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
     await tx.wait();
   }
 
@@ -57,9 +64,9 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     return owner.signTypedData({ name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress }, approvalTypes,
       { agent: agentAddress, wallet: wallet.address, target: targetAddress, value, calldataHash: ethers.keccak256(data), nonce, deadline, policyHash, approvalDeadline });
   }
-  async function execute(policyHash: string, value: bigint, nonce: bigint, deadline = DEADLINE) {
-    const sig = await signIntent(policyHash, value, nonce, deadline);
-    return guard.execute(agentAddress, wallet.address, targetAddress, value, "0x", nonce, deadline, policyHash, sig, { value });
+  async function execute(policyHash: string, value: bigint, nonce: bigint, deadline = DEADLINE, data = "0x") {
+    const sig = await signIntent(policyHash, value, nonce, deadline, data);
+    return guard.execute(agentAddress, wallet.address, targetAddress, value, data, nonce, deadline, policyHash, sig, { value });
   }
   async function executeWithApproval(policyHash: string, value: bigint, nonce: bigint, approvalDeadline: bigint, intentDeadline = DEADLINE, data = "0x", intentSig?: string, approvalSig?: string) {
     const sig = intentSig ?? await signIntent(policyHash, value, nonce, intentDeadline, data);
