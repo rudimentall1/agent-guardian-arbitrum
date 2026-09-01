@@ -43,6 +43,10 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     ],
   };
 
+  const policyCreateInterface = new ethers.Interface([
+    "function createPolicy(bytes32 salt,address agent,uint128 maxTxValue,uint128 dailyLimit,uint128 approvalThreshold,uint64 validFrom,uint64 validUntil,tuple(address target,bytes4 selector)[] calls,address[] nativeTransferTargets)"
+  ]);
+
   async function registerAgent() {
     const net = await ethers.provider.getNetwork();
     const domain = { name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: await agentRegistry.getAddress() };
@@ -60,7 +64,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     calls: { target: string; selector: string }[],
     nativeTargets: string[]
   ) {
-    const tx = await policyRegistry.connect(owner).createPolicy(
+    const data = policyCreateInterface.encodeFunctionData("createPolicy", [
       salt,
       policyAgent,
       maxTxValue,
@@ -70,7 +74,8 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
       FAR_DEADLINE,
       calls,
       nativeTargets,
-    );
+    ]);
+    const tx = await owner.sendTransaction({ to: await policyRegistry.getAddress(), data });
     await tx.wait();
   }
 
