@@ -3,17 +3,6 @@ pragma solidity 0.8.24;
 
 import {IPolicyRegistry} from "../interfaces/IPolicyRegistry.sol";
 
-/// @notice TEST-ONLY mock. Lets AgentExecutionGuard tests set an
-/// arbitrary policyHash -> (owner, agent, active, withinWindow,
-/// maxTxValue, authorized calls) binding directly, instead of going
-/// through the real PolicyRegistry's full creation flow, which is
-/// orthogonal to what AgentExecutionGuard's own tests are checking. Real
-/// PolicyRegistry wiring (including the P1 owner-authorization fix) is
-/// covered separately by
-/// contracts-test/AgentExecutionGuard.remediation.test.ts,
-/// contracts-test/AgentExecutionGuard.gate4a.test.ts, and
-/// contracts-test/P1PolicyOwnerAuthorization.poc.test.ts. Not part of
-/// any deployment.
 contract MockPolicyRegistry is IPolicyRegistry {
     struct Binding {
         address owner;
@@ -21,25 +10,24 @@ contract MockPolicyRegistry is IPolicyRegistry {
         bool active;
         bool withinWindow;
         uint256 maxTxValue;
+        uint128 dailyLimit;
+        uint128 approvalThreshold;
     }
 
     mapping(bytes32 => Binding) private _bindings;
     mapping(bytes32 => mapping(bytes32 => bool)) private _authorizedCalls;
     mapping(bytes32 => mapping(address => bool)) private _authorizedNativeTransfer;
 
-    /// @notice Convenience setter for tests that don't care about the
-    /// P1 owner-authorization check — sets `owner == agent`, so callers
-    /// wiring up a matching `MockAgentRegistry.setOwner(agent, agent)`
-    /// (or simply relying on `MockAgentRegistry`'s own `ownerOf` default
-    /// — see that mock's NatSpec) will pass the owner check without
-    /// needing to think about it. Tests that DO care about the P1 check
-    /// should use `setFullBinding` instead, with an explicit owner.
     function setBinding(bytes32 policyHash, address agent, bool active) external {
-        _bindings[policyHash].owner = agent;
-        _bindings[policyHash].agent = agent;
-        _bindings[policyHash].active = active;
-        _bindings[policyHash].withinWindow = true;
-        _bindings[policyHash].maxTxValue = type(uint256).max;
+        _bindings[policyHash] = Binding({
+            owner: agent,
+            agent: agent,
+            active: active,
+            withinWindow: true,
+            maxTxValue: type(uint256).max,
+            dailyLimit: type(uint128).max,
+            approvalThreshold: type(uint128).max
+        });
     }
 
     function setFullBinding(
@@ -50,8 +38,20 @@ contract MockPolicyRegistry is IPolicyRegistry {
         bool withinWindow,
         uint256 maxTxValue
     ) external {
-        _bindings[policyHash] =
-            Binding({owner: owner, agent: agent, active: active, withinWindow: withinWindow, maxTxValue: maxTxValue});
+        _bindings[policyHash] = Binding({
+            owner: owner,
+            agent: agent,
+            active: active,
+            withinWindow: withinWindow,
+            maxTxValue: maxTxValue,
+            dailyLimit: type(uint128).max,
+            approvalThreshold: type(uint128).max
+        });
+    }
+
+    function setSpendingPolicy(bytes32 policyHash, uint128 dailyLimit, uint128 approvalThreshold) external {
+        _bindings[policyHash].dailyLimit = dailyLimit;
+        _bindings[policyHash].approvalThreshold = approvalThreshold;
     }
 
     function authorizeCall(bytes32 policyHash, address target, bytes4 selector) external {
@@ -81,5 +81,23 @@ contract MockPolicyRegistry is IPolicyRegistry {
         } else {
             callAllowed = false;
         }
+    }
+
+    function getMandate(bytes32 policyId) external view returns (Mandate memory) {
+        Binding storage b = _bindings[policyId];
+        return Mandate({
+            owner: b.owner,
+            agent: b.agent,
+            active: b.active,
+            maxTxValue: b.maxTxValue > type(uint128).max ? type(uint128).max : uint128(b.maxTxValue),
+            dailyLimit: b.dailyLimit,
+            approvalThreshold: b.approvalThreshold,
+            validFrom: 0,
+            validUntil: type(uint64).max
+        });
+    }
+
+    function policyIdOfHash(bytes32 policyHash) external pure returns (bytes32) {
+        return policyHash;
     }
 }
