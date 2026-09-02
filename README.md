@@ -247,3 +247,15 @@ limits
 recovery mechanisms
 
 Agent Guardian provides the missing security infrastructure between autonomous intelligence and blockchain assets
+
+## Demo
+
+Run:
+
+``bash
+npx hardhat run scripts/demo.ts
+``n
+Output:
+Agent registered
+Guardian assigned
+Agent active: false
