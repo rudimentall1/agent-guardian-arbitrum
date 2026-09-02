@@ -1,0 +1,9 @@
+{
+  "network": "arbitrumSepolia",
+  "chainId": 421614,
+  "contracts": {
+    "AgentRegistry": "0x249761b2F52258e74C91F5CD345Bd9C447aD18F3",
+    "PolicyRegistry": "0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87",
+    "AgentExecutionGuard": "0x8845f20D83dAD3a494073F1AE1aEB6F9f85146AD"
+  }
+}
