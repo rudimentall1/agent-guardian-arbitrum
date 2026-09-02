@@ -19,7 +19,6 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
   let guardAddress: string;
 
   const FAR_DEADLINE = 4102444800n;
-  const MAX_UINT128 = (1n << 128n) - 1n;
   const FOO_SELECTOR = ethers.id("foo(uint256)").slice(0, 10);
   const BAR_SELECTOR = ethers.id("bar(address)").slice(0, 10);
 
@@ -59,6 +58,8 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     nativeTargets: string[],
   ) {
     const selector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
+
+    // createPolicy has 9 parameters; the last two are dynamic arrays and occupy two head words.
     const staticHeadWords = 9n;
     const callsTail = [uintWord(BigInt(calls.length)), ...calls.flatMap((call) => [addressWord(call.target), bytes4Word(call.selector)])];
     const nativeTail = [uintWord(BigInt(nativeTargets.length)), ...nativeTargets.map(addressWord)];
@@ -110,7 +111,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     maxTxValue = ethers.parseEther("1")
   ) {
     const salt = ethers.keccak256(ethers.toUtf8Bytes(saltText));
-    await sendCreatePolicy(salt, agentAddress, maxTxValue, MAX_UINT128, MAX_UINT128, calls, nativeTargets);
+    await sendCreatePolicy(salt, agentAddress, maxTxValue, (2n ** 128n) - 1n, (2n ** 128n) - 1n, calls, nativeTargets);
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
     return await policyRegistry.policyHashOf(policyId);
   }
@@ -193,7 +194,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     const sig = await otherAgent.signTypedData({ name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: await agentRegistry.getAddress() }, registrationTypes, { agent: otherAgent.address, owner: owner.address, metadataHash });
     await agentRegistry.register(otherAgent.address, owner.address, metadataHash, sig);
     const salt = ethers.keccak256(ethers.toUtf8Bytes("other-policy"));
-    await sendCreatePolicy(salt, otherAgent.address, ethers.parseEther("1"), MAX_UINT128, MAX_UINT128, [{ target: recordingTargetAddress, selector: "0x00000000" }], [recordingTargetAddress]);
+    await sendCreatePolicy(salt, otherAgent.address, ethers.parseEther("1"), (2n ** 128n) - 1n, (2n ** 128n) - 1n, [{ target: recordingTargetAddress, selector: "0x00000000" }], [recordingTargetAddress]);
     const id = await policyRegistry.computePolicyId(owner.address, salt);
     const policy = await policyRegistry.policyHashOf(id);
     await expect(execute(policy, recordingTargetAddress, 0n, "0x", 0n)).to.be.revertedWithCustomError(guard, "PolicyAgentMismatch");
@@ -211,7 +212,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     const policy = await createPolicy("target-binding", [{ target: selectorTargetAddress, selector: FOO_SELECTOR }]);
     const data = selectorTarget.interface.encodeFunctionData("foo", [1]);
     const sig = await signIntent(policy, selectorTargetAddress, 0n, data, 0n);
-    await expect(guard.execute(agentAddress, wallet.address, recordingTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n })).to.be.revertedWithCustomError(guard, "InvalidSignature");
+    await expect(guard.execute(agentAddress, wallet.address, recordingTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n })).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
   });
 
   it("rejects replay and future/stale nonces", async function () {
