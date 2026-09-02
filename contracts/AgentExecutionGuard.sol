@@ -3,6 +3,7 @@ pragma solidity 0.8.24;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IAgentRegistry} from "./interfaces/IAgentRegistry.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
@@ -179,7 +180,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
                 policyHash,
                 approvalDeadline
             );
-            if (ECDSA.recover(approvalDigest, approvalSignature) != registeredOwner) {
+            if (!SignatureChecker.isValidSignatureNow(registeredOwner, approvalDigest, approvalSignature)) {
                 revert InvalidApprovalSignature();
             }
         }
@@ -252,8 +253,3 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         return _hashTypedDataV4(structHash);
     }
 }
-
-
-
-
-
