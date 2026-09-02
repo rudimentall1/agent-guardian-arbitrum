@@ -252,10 +252,46 @@ Agent Guardian provides the missing security infrastructure between autonomous i
 
 Run:
 
-``bash
+```bash
 npx hardhat run scripts/demo.ts
-``n
+```
+
 Output:
-Agent registered
-Guardian assigned
+
+Agent registered  
+Guardian assigned  
 Agent active: false
+
+
+## Architecture
+
+AgentRegistry
+- agent identity
+- ownership lifecycle
+- recovery guardian controls
+
+PolicyRegistry
+- programmable permissions
+- spending limits
+- authorized targets
+
+AgentExecutionGuard
+- EIP-712 signed intents
+- nonce protection
+- replay prevention
+- policy enforcement
+
+
+## Deployment
+
+Network:
+Arbitrum Sepolia
+
+AgentRegistry:
+0x249761b2F52258e74C91F5CD345Bd9C447aD18F3
+
+PolicyRegistry:
+0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87
+
+AgentExecutionGuard:
+0x8845f0D83dAD3a494073F1AE1aEB6F9f85146AD
