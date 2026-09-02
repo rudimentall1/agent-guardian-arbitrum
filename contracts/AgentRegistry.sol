@@ -64,6 +64,7 @@ contract AgentRegistry is EIP712 {
         bool active;
         bytes32 metadataHash;
         uint64 registeredAt;
+        address recoveryAgent;
     }
 
     /// @dev keccak256("AgentRegistration(address agent,address owner,bytes32 metadataHash)")
@@ -76,6 +77,8 @@ contract AgentRegistry is EIP712 {
     event AgentDeactivated(address indexed agent, address indexed owner);
     event AgentReactivated(address indexed agent, address indexed owner);
     event AgentOwnershipTransferred(address indexed agent, address indexed previousOwner, address indexed newOwner);
+    event RecoveryGuardianSet(address indexed agent, address indexed guardian);
+    event RecoveryExecuted(address indexed agent, address indexed guardian);
 
     error ZeroAddress();
     error AgentAlreadyRegistered(address agent);
@@ -85,6 +88,7 @@ contract AgentRegistry is EIP712 {
     error AgentAlreadyInactive(address agent);
     error InvalidSignature();
     error SameOwner();
+    error NotRecoveryGuardian(address agent, address caller);
 
     constructor() EIP712("AgentRegistry", "1") {}
 
@@ -105,7 +109,7 @@ contract AgentRegistry is EIP712 {
         address signer = ECDSA.recover(digest, signature);
         if (signer != agent) revert InvalidSignature();
 
-        _agents[agent] = Agent({owner: owner, active: true, metadataHash: metadataHash, registeredAt: uint64(block.timestamp)});
+        _agents[agent] = Agent({owner: owner, active: true, metadataHash: metadataHash, registeredAt: uint64(block.timestamp), recoveryAgent: address(0)});
 
         emit AgentRegistered(agent, owner, metadataHash);
     }
@@ -167,4 +171,40 @@ contract AgentRegistry is EIP712 {
     function ownerOf(address agent) external view returns (address) {
         return _agents[agent].owner;
     }
+
+
+    /// @notice Configure emergency recovery guardian.
+    /// Guardian cannot take ownership. Guardian can only disable the agent.
+    function setRecoveryGuardian(
+        address agent,
+        address guardian
+    ) external {
+        Agent storage record = _agents[agent];
+
+        if (record.owner == address(0)) revert AgentNotRegistered(agent);
+        if (record.owner != msg.sender) revert NotAgentOwner(agent, msg.sender);
+        if (guardian == address(0)) revert ZeroAddress();
+
+        record.recoveryAgent = guardian;
+
+        emit RecoveryGuardianSet(agent, guardian);
+    }
+
+    /// @notice Emergency recovery action.
+    /// Disables execution without changing ownership.
+    function executeRecovery(
+        address agent
+    ) external {
+        Agent storage record = _agents[agent];
+
+        if (record.owner == address(0)) revert AgentNotRegistered(agent);
+        if (record.recoveryAgent != msg.sender) {
+            revert NotRecoveryGuardian(agent, msg.sender);
+        }
+
+        record.active = false;
+
+        emit RecoveryExecuted(agent, msg.sender);
+    }
+
 }
