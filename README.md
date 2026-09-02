@@ -1,115 +1,249 @@
 # Agent Guardian
 
-Security infrastructure for autonomous financial agents on Arbitrum and Robinhood Chain.
+## Autonomous Agent Security Layer for Arbitrum
 
-Agent Guardian gives autonomous agents programmable financial authority instead of unrestricted wallet control.
+Agent Guardian is a security framework for autonomous AI agents operating on-chain.
 
-## Project status
+The protocol allows AI agents to execute transactions while enforcing strict security boundaries:
+- agent identity verification
+- programmable spending policies
+- transaction authorization
+- replay protection
+- emergency recovery controls
 
-Early protocol implementation. The repository is being built in security gates: protocol specification first, deterministic on-chain authorization second, Guardian intelligence integration third, and live chain deployment last.
+Built for the future of autonomous wallets and AI-driven Web3 applications.
 
-This is intentionally not a copy of an earlier repository. The project reuses proven security concepts while introducing a new execution model for autonomous financial agents.
+---
 
-## Core model
+# Problem
 
-```text
+AI agents will increasingly control wallets, execute trades, manage assets and interact with smart contracts.
+
+Current wallet systems have a critical limitation:
+
+> If an AI agent key is compromised, there is no native security layer between the agent and user funds.
+
+Agent Guardian introduces a programmable security boundary between AI agents and blockchain execution.
+
+---
+
+# Solution
+
+Agent Guardian separates:
+
+
 AI Agent
-   |
-   v
-Signed Intent
-   |
-   v
-Guardian Intelligence
-   |-- risk
-   |-- reputation
-   |-- simulation
-   |-- threat intelligence
-   |
-   v
-Deterministic Execution Guard
-   |-- agent identity
-   |-- policy commitment
-   |-- nonce
-   |-- deadline
-   |-- exact target/value/calldata
-   |-- financial mandate
-   |
-   +-------> Arbitrum
-   |
-   +-------> Robinhood Chain
-```
+|
+|
+v
+AgentExecutionGuard
+|
++----------------+
+| |
+v v
+AgentRegistry PolicyRegistry
+|
+|
+Recovery Guardian
 
-AI-generated analysis is advisory. Authorization is deterministic and enforced at the execution boundary.
 
-## Project lineage
+The agent never receives unrestricted wallet control.
 
-Agent Guardian builds on several earlier security-focused projects:
+Every execution is checked against:
 
-- [Agentic Wallet Guardian v3](https://github.com/rudimentall1/agentic-wallet-guardian-v3) — wallet intelligence, risk fusion, policy, reputation, security memory, simulation, explainable decisions, MCP/API infrastructure.
-- [Agent Guardrail](https://github.com/rudimentall1/agent-guardrail) — deterministic agent-side guardrails and explicit enforcement concepts.
-- [AttestGuard](https://github.com/rudimentall1/AttestGuard) — cryptographic attestation, proof verification, Solidity policy enforcement and circuit-breaker patterns.
+- registered agent identity
+- active status
+- owner authorization
+- policy permissions
+- spending limits
+- nonce protection
+- emergency recovery state
 
-The earlier repositories remain independent. This repository is the next protocol iteration and documents which ideas are reused, redesigned, and newly introduced.
+---
 
-## What is new here
+# Core Components
 
-- Agent financial mandates
-- Signed execution intents
-- EIP-712 domain separation
-- Replay protection
-- Policy commitments
-- Deterministic execution authorization
-- Explicit approval flows
-- Arbitrum integration
-- Robinhood Chain integration
-- Adversarial and fuzz testing around authorization invariants
+## AgentRegistry
 
-## Security invariants
+Responsible for:
 
-The implementation must guarantee, at minimum:
+- agent identity lifecycle
+- registration
+- activation/deactivation
+- ownership transfer
+- recovery guardian controls
 
-1. An unregistered agent cannot execute.
-2. A disabled agent cannot execute.
-3. An invalid signature cannot execute.
-4. An expired intent cannot execute.
-5. A consumed nonce cannot execute twice.
-6. An intent signed for another chain cannot execute here.
-7. An intent signed for another execution guard cannot execute here.
-8. Modified calldata invalidates authorization.
-9. Modified target invalidates authorization.
-10. Modified value invalidates authorization.
-11. An inactive policy cannot authorize execution.
-12. A policy version mismatch cannot authorize execution.
-13. Execution outside a financial mandate reverts.
-14. Emergency pause blocks execution.
-15. Approval cannot expand authority beyond its defined scope.
-16. An agent cannot bypass the execution guard within its delegated authority.
+Security properties:
 
-## Documentation
+- EIP-712 signed registration
+- anti-front running protection
+- immutable agent identity binding
 
-The protocol specification, threat model, architecture decisions, and project lineage will live under `docs/` as implementation progresses.
+---
 
-## Development
+## PolicyRegistry
 
-Standard workflow (with normal network access):
+Defines what an agent is allowed to do.
 
-```
+Policies include:
+
+- allowed contracts
+- allowed function selectors
+- maximum transaction value
+- validity period
+- native transfer permissions
+
+Example:
+
+
+Agent can:
+
+✓ call Uniswap router
+✓ spend max 0.1 ETH
+✓ only during active period
+
+Agent cannot:
+
+✗ transfer unlimited funds
+✗ call unknown contracts
+✗ bypass policy rules
+
+
+---
+
+## AgentExecutionGuard
+
+The execution firewall.
+
+Before every transaction:
+
+Verify agent signature
+Check nonce
+Check deadline
+Verify active agent
+Verify policy ownership
+Validate target + calldata
+Execute transaction
+
+Protection against:
+
+- replay attacks
+- modified calldata
+- unauthorized targets
+- unauthorized policies
+- cross-chain replay
+- reentrancy attacks
+
+---
+
+# Recovery Guardian
+
+Gate 6 introduces emergency recovery controls.
+
+A trusted guardian can disable a compromised agent.
+
+Example:
+
+
+AI agent compromised
+
+    |
+    v
+
+Recovery Guardian
+
+    |
+    v
+
+Agent disabled immediately
+
+
+This provides a human-controlled emergency brake for autonomous systems.
+
+---
+
+# Security Testing
+
+Current test coverage:
+
+
+166 passing
+
+
+Implemented security gates:
+
+✅ Gate 4A - Call authorization  
+✅ Gate 4B - Spending limits and owner approvals  
+✅ Gate 5 - Emergency pause controls  
+✅ Gate 6 - Recovery Guardian Controls  
+
+Test categories:
+
+- replay attacks
+- signature manipulation
+- ownership attacks
+- policy abuse
+- unauthorized execution
+- reentrancy attempts
+- cross-agent confusion
+- cross-chain replay
+
+---
+
+# Deployment
+
+Network:
+
+
+Arbitrum Sepolia
+Chain ID: 421614
+
+
+Contracts:
+
+## AgentRegistry
+
+
+0x249761b2F52258e74C91F5CD345Bd9C447aD18F3
+
+
+## PolicyRegistry
+
+
+0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87
+
+
+## AgentExecutionGuard
+
+
+0x8845f20D83dAD3a494073F1AE1aEB6F9f85146AD
+
+
+---
+
+# Local Development
+
+Install:
+
+```bash
 npm install
-npx hardhat compile
-npx hardhat test
-```
 
-`scripts/compile.js` exists only as a fallback for network-restricted
-sandboxes where `binaries.soliditylang.org` isn't reachable — it compiles
-via the `solc` npm package instead of Hardhat's own downloader and writes
-artifacts in the same shape. If you have normal network access you don't
-need it; `npx hardhat compile` will download the compiler itself. See
-`docs/gate-1-agent-registry.md` for why this exists.
+Run tests:
 
-## Networks
+npm test
 
-The first target is Robinhood Chain testnet, followed by Arbitrum testnet integration and production-ready deployment only after the security gates pass.
+Deploy:
 
-## License
+npx hardhat run scripts/deploy.ts --network arbitrumSepolia
+Vision
 
-License will be selected before the first production release.
+Agent Guardian is designed as a security layer for the next generation of autonomous agents.
+
+As AI agents become financial actors, they need:
+
+identity
+permissions
+limits
+recovery mechanisms
+
+Agent Guardian provides the missing security infrastructure between autonomous intelligence and blockchain assets
