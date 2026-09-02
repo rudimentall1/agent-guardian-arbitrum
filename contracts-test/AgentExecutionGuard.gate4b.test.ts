@@ -39,8 +39,8 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
     nativeTargets: string[],
   ) {
     const fnSelector = ethers.id("createPolicy(bytes32,address,uint128,uint128,uint128,uint64,uint64,(address,bytes4)[],address[])").slice(0, 10);
-    // 10 parameters => 10 words in the ABI head. The last two words are offsets to dynamic arrays.
-    const staticHeadWords = 10n;
+    // 9 parameters => 9 words in the ABI head. The last two words are offsets to dynamic arrays.
+    const staticHeadWords = 9n;
     const callsTail = [uintWord(BigInt(calls.length)), ...calls.flatMap((call) => [addressWord(call.target), bytes4Word(call.selector)])];
     const nativeTail = [uintWord(BigInt(nativeTargets.length)), ...nativeTargets.map(addressWord)];
     const callsOffset = staticHeadWords * 32n;
@@ -124,18 +124,18 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
   describe("daily-limit accounting", function () {
     it("allows exactly dailyLimit", async function () {
       const limit = ethers.parseEther("1");
-      const policy = await createPolicy(limit, ethers.MaxUint128);
+      const policy = await createPolicy(limit, (2n ** 128n) - 1n);
       await execute(policy, limit, 0n);
       expect((await guard.dailySpend(policy)).spent).to.equal(limit);
     });
     it("rejects dailyLimit + 1 wei", async function () {
       const limit = ethers.parseEther("1");
-      const policy = await createPolicy(limit, ethers.MaxUint128);
+      const policy = await createPolicy(limit, (2n ** 128n) - 1n);
       await expect(execute(policy, limit + 1n, 0n)).to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
     });
     it("aggregates sequential spends under one policy", async function () {
       const limit = ethers.parseEther("1");
-      const policy = await createPolicy(limit, ethers.MaxUint128);
+      const policy = await createPolicy(limit, (2n ** 128n) - 1n);
       await execute(policy, ethers.parseEther("0.4"), 0n);
       await execute(policy, ethers.parseEther("0.6"), 1n);
       expect((await guard.dailySpend(policy)).spent).to.equal(limit);
@@ -146,7 +146,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       await reverter.waitForDeployment();
       const ra = await reverter.getAddress();
       const salt = ethers.keccak256(ethers.toUtf8Bytes("reverter"));
-      await sendCreatePolicy(salt, agentAddress, ethers.parseEther("1"), ethers.parseEther("1"), ethers.MaxUint128, [{target: ra, selector: ZERO_SELECTOR}], [ra]);
+      await sendCreatePolicy(salt, agentAddress, ethers.parseEther("1"), ethers.parseEther("1"), (2n ** 128n) - 1n, [{target: ra, selector: ZERO_SELECTOR}], [ra]);
       const policy = await policyRegistry.policyHashOf(await policyRegistry.computePolicyId(owner.address, salt));
       const sig = await agent.signTypedData({name:"AgentExecutionGuard",version:"1",chainId:(await ethers.provider.getNetwork()).chainId,verifyingContract:guardAddress},intentTypes,
         {agent:agentAddress,wallet:wallet.address,target:ra,value:ethers.parseEther("0.5"),calldataHash:ethers.keccak256("0x"),nonce:0n,deadline:DEADLINE,policyHash:policy});
@@ -155,7 +155,7 @@ describe("Gate 4B: daily limits and owner approvals — full stack", function ()
       expect(await guard.nextNonce(agentAddress)).to.equal(0n);
     });
     it("zero dailyLimit rejects positive value", async function () {
-      const policy = await createPolicy(0n, ethers.MaxUint128);
+      const policy = await createPolicy(0n, (2n ** 128n) - 1n);
       await expect(execute(policy, 1n, 0n)).to.be.revertedWithCustomError(guard, "DailyLimitExceeded");
     });
   });
