@@ -212,7 +212,7 @@ describe("Gate 4A: call authorization and maxTxValue — full stack", function (
     const policy = await createPolicy("target-binding", [{ target: selectorTargetAddress, selector: FOO_SELECTOR }]);
     const data = selectorTarget.interface.encodeFunctionData("foo", [1]);
     const sig = await signIntent(policy, selectorTargetAddress, 0n, data, 0n);
-    await expect(guard.execute(agentAddress, wallet.address, recordingTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n })).to.be.revertedWithCustomError(guard, "CallNotAuthorized");
+    await expect(guard.execute(agentAddress, wallet.address, recordingTargetAddress, 0n, data, 0n, FAR_DEADLINE, policy, sig, { value: 0n })).to.be.revertedWithCustomError(guard, "InvalidSignature");
   });
 
   it("rejects replay and future/stale nonces", async function () {
