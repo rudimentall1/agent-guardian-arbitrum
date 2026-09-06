@@ -7,4 +7,5 @@ import type * as mocks from "./mocks";
 export type { mocks };
 export type { AgentExecutionGuard } from "./AgentExecutionGuard";
 export type { AgentRegistry } from "./AgentRegistry";
+export type { MockERC1271Owner } from "./MockERC1271Owner";
 export type { PolicyRegistry } from "./PolicyRegistry";

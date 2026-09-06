@@ -36,10 +36,17 @@ export interface AgentExecutionGuardInterface extends Interface {
       | "hashApproval"
       | "hashIntent"
       | "nextNonce"
+      | "pauseAgent"
+      | "pausedAgents"
+      | "unpauseAgent"
   ): FunctionFragment;
 
   getEvent(
-    nameOrSignatureOrTopic: "EIP712DomainChanged" | "IntentExecuted"
+    nameOrSignatureOrTopic:
+      | "AgentPaused"
+      | "AgentUnpaused"
+      | "EIP712DomainChanged"
+      | "IntentExecuted"
   ): EventFragment;
 
   encodeFunctionData(
@@ -120,6 +127,18 @@ export interface AgentExecutionGuardInterface extends Interface {
     functionFragment: "nextNonce",
     values: [AddressLike]
   ): string;
+  encodeFunctionData(
+    functionFragment: "pauseAgent",
+    values: [AddressLike]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "pausedAgents",
+    values: [AddressLike]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "unpauseAgent",
+    values: [AddressLike]
+  ): string;
 
   decodeFunctionResult(
     functionFragment: "POLICY_REGISTRY",
@@ -146,6 +165,39 @@ export interface AgentExecutionGuardInterface extends Interface {
   ): Result;
   decodeFunctionResult(functionFragment: "hashIntent", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "nextNonce", data: BytesLike): Result;
+  decodeFunctionResult(functionFragment: "pauseAgent", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "pausedAgents",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "unpauseAgent",
+    data: BytesLike
+  ): Result;
+}
+
+export namespace AgentPausedEvent {
+  export type InputTuple = [agent: AddressLike];
+  export type OutputTuple = [agent: string];
+  export interface OutputObject {
+    agent: string;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
+export namespace AgentUnpausedEvent {
+  export type InputTuple = [agent: AddressLike];
+  export type OutputTuple = [agent: string];
+  export interface OutputObject {
+    agent: string;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
 }
 
 export namespace EIP712DomainChangedEvent {
@@ -328,6 +380,12 @@ export interface AgentExecutionGuard extends BaseContract {
 
   nextNonce: TypedContractMethod<[arg0: AddressLike], [bigint], "view">;
 
+  pauseAgent: TypedContractMethod<[agent: AddressLike], [void], "nonpayable">;
+
+  pausedAgents: TypedContractMethod<[arg0: AddressLike], [boolean], "view">;
+
+  unpauseAgent: TypedContractMethod<[agent: AddressLike], [void], "nonpayable">;
+
   getFunction<T extends ContractMethod = ContractMethod>(
     key: string | FunctionFragment
   ): T;
@@ -441,7 +499,30 @@ export interface AgentExecutionGuard extends BaseContract {
   getFunction(
     nameOrSignature: "nextNonce"
   ): TypedContractMethod<[arg0: AddressLike], [bigint], "view">;
+  getFunction(
+    nameOrSignature: "pauseAgent"
+  ): TypedContractMethod<[agent: AddressLike], [void], "nonpayable">;
+  getFunction(
+    nameOrSignature: "pausedAgents"
+  ): TypedContractMethod<[arg0: AddressLike], [boolean], "view">;
+  getFunction(
+    nameOrSignature: "unpauseAgent"
+  ): TypedContractMethod<[agent: AddressLike], [void], "nonpayable">;
 
+  getEvent(
+    key: "AgentPaused"
+  ): TypedContractEvent<
+    AgentPausedEvent.InputTuple,
+    AgentPausedEvent.OutputTuple,
+    AgentPausedEvent.OutputObject
+  >;
+  getEvent(
+    key: "AgentUnpaused"
+  ): TypedContractEvent<
+    AgentUnpausedEvent.InputTuple,
+    AgentUnpausedEvent.OutputTuple,
+    AgentUnpausedEvent.OutputObject
+  >;
   getEvent(
     key: "EIP712DomainChanged"
   ): TypedContractEvent<
@@ -458,6 +539,28 @@ export interface AgentExecutionGuard extends BaseContract {
   >;
 
   filters: {
+    "AgentPaused(address)": TypedContractEvent<
+      AgentPausedEvent.InputTuple,
+      AgentPausedEvent.OutputTuple,
+      AgentPausedEvent.OutputObject
+    >;
+    AgentPaused: TypedContractEvent<
+      AgentPausedEvent.InputTuple,
+      AgentPausedEvent.OutputTuple,
+      AgentPausedEvent.OutputObject
+    >;
+
+    "AgentUnpaused(address)": TypedContractEvent<
+      AgentUnpausedEvent.InputTuple,
+      AgentUnpausedEvent.OutputTuple,
+      AgentUnpausedEvent.OutputObject
+    >;
+    AgentUnpaused: TypedContractEvent<
+      AgentUnpausedEvent.InputTuple,
+      AgentUnpausedEvent.OutputTuple,
+      AgentUnpausedEvent.OutputObject
+    >;
+
     "EIP712DomainChanged()": TypedContractEvent<
       EIP712DomainChangedEvent.InputTuple,
       EIP712DomainChangedEvent.OutputTuple,

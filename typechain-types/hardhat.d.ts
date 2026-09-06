@@ -14,9 +14,17 @@ import * as Contracts from ".";
 declare module "hardhat/types/runtime" {
   interface HardhatEthersHelpers extends HardhatEthersHelpersBase {
     getContractFactory(
+      name: "IERC1271",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IERC1271__factory>;
+    getContractFactory(
       name: "IERC5267",
       signerOrOptions?: ethers.Signer | FactoryOptions
     ): Promise<Contracts.IERC5267__factory>;
+    getContractFactory(
+      name: "IERC7913SignatureVerifier",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IERC7913SignatureVerifier__factory>;
     getContractFactory(
       name: "ECDSA",
       signerOrOptions?: ethers.Signer | FactoryOptions
@@ -62,6 +70,10 @@ declare module "hardhat/types/runtime" {
       signerOrOptions?: ethers.Signer | FactoryOptions
     ): Promise<Contracts.IPolicyRegistry__factory>;
     getContractFactory(
+      name: "MockERC1271Owner",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.MockERC1271Owner__factory>;
+    getContractFactory(
       name: "MockAgentRegistry",
       signerOrOptions?: ethers.Signer | FactoryOptions
     ): Promise<Contracts.MockAgentRegistry__factory>;
@@ -91,10 +103,20 @@ declare module "hardhat/types/runtime" {
     ): Promise<Contracts.PolicyRegistry__factory>;
 
     getContractAt(
+      name: "IERC1271",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IERC1271>;
+    getContractAt(
       name: "IERC5267",
       address: string | ethers.Addressable,
       signer?: ethers.Signer
     ): Promise<Contracts.IERC5267>;
+    getContractAt(
+      name: "IERC7913SignatureVerifier",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IERC7913SignatureVerifier>;
     getContractAt(
       name: "ECDSA",
       address: string | ethers.Addressable,
@@ -150,6 +172,11 @@ declare module "hardhat/types/runtime" {
       address: string | ethers.Addressable,
       signer?: ethers.Signer
     ): Promise<Contracts.IPolicyRegistry>;
+    getContractAt(
+      name: "MockERC1271Owner",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.MockERC1271Owner>;
     getContractAt(
       name: "MockAgentRegistry",
       address: string | ethers.Addressable,
@@ -187,9 +214,17 @@ declare module "hardhat/types/runtime" {
     ): Promise<Contracts.PolicyRegistry>;
 
     deployContract(
+      name: "IERC1271",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IERC1271>;
+    deployContract(
       name: "IERC5267",
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.IERC5267>;
+    deployContract(
+      name: "IERC7913SignatureVerifier",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IERC7913SignatureVerifier>;
     deployContract(
       name: "ECDSA",
       signerOrOptions?: ethers.Signer | DeployContractOptions
@@ -234,6 +269,10 @@ declare module "hardhat/types/runtime" {
       name: "IPolicyRegistry",
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.IPolicyRegistry>;
+    deployContract(
+      name: "MockERC1271Owner",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.MockERC1271Owner>;
     deployContract(
       name: "MockAgentRegistry",
       signerOrOptions?: ethers.Signer | DeployContractOptions
@@ -264,10 +303,20 @@ declare module "hardhat/types/runtime" {
     ): Promise<Contracts.PolicyRegistry>;
 
     deployContract(
+      name: "IERC1271",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IERC1271>;
+    deployContract(
       name: "IERC5267",
       args: any[],
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.IERC5267>;
+    deployContract(
+      name: "IERC7913SignatureVerifier",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IERC7913SignatureVerifier>;
     deployContract(
       name: "ECDSA",
       args: any[],
@@ -323,6 +372,11 @@ declare module "hardhat/types/runtime" {
       args: any[],
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.IPolicyRegistry>;
+    deployContract(
+      name: "MockERC1271Owner",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.MockERC1271Owner>;
     deployContract(
       name: "MockAgentRegistry",
       args: any[],

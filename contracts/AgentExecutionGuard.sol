@@ -3,6 +3,7 @@ pragma solidity 0.8.24;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IAgentRegistry} from "./interfaces/IAgentRegistry.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
@@ -26,6 +27,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     IPolicyRegistry public immutable POLICY_REGISTRY;
 
     mapping(address => uint256) public nextNonce;
+    mapping(address => bool) public pausedAgents;
 
     struct DailySpend {
         uint64 day;
@@ -34,6 +36,8 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
 
     /// @notice Cumulative successful native-value spend for each immutable policy's current UTC day.
     mapping(bytes32 => DailySpend) public dailySpend;
+    event AgentPaused(address indexed agent);
+    event AgentUnpaused(address indexed agent);
 
     event IntentExecuted(
         address indexed agent, address indexed wallet, address indexed target, uint256 nonce, bytes32 policyHash
@@ -41,6 +45,8 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
 
     error ZeroAddress();
     error AgentNotActive(address agent);
+    error AgentExecutionPaused(address agent);
+    error NotPolicyOwner();
     error IntentExpired(uint256 deadline, uint256 currentTimestamp);
     error InvalidNonce(uint256 provided, uint256 expected);
     error InvalidSignature();
@@ -65,6 +71,20 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         POLICY_REGISTRY = IPolicyRegistry(policyRegistry);
     }
 
+    function pauseAgent(address agent) external {
+        if (REGISTRY.ownerOf(agent) != msg.sender) {
+            revert NotPolicyOwner();
+        }
+        pausedAgents[agent] = true;
+        emit AgentPaused(agent);
+    }
+    function unpauseAgent(address agent) external {
+        if (REGISTRY.ownerOf(agent) != msg.sender) {
+            revert NotPolicyOwner();
+        }
+        pausedAgents[agent] = false;
+        emit AgentUnpaused(agent);
+    }
     /// @notice Execute an intent that does not require an owner approval.
     /// @dev Kept as the Gate 4A entry point for backwards compatibility.
     /// If the policy requires approval, this function reverts with
@@ -127,6 +147,9 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         bytes memory approvalSignature
     ) internal returns (bytes memory returndata) {
         if (agent == address(0) || wallet == address(0) || target == address(0)) revert ZeroAddress();
+        if (pausedAgents[agent]) {
+            revert AgentExecutionPaused(agent);
+        }
         if (block.timestamp > deadline) revert IntentExpired(deadline, block.timestamp);
         if (msg.value != value) revert ValueMismatch(msg.value, value);
 
@@ -179,7 +202,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
                 policyHash,
                 approvalDeadline
             );
-            if (ECDSA.recover(approvalDigest, approvalSignature) != registeredOwner) {
+            if (!SignatureChecker.isValidSignatureNow(registeredOwner, approvalDigest, approvalSignature)) {
                 revert InvalidApprovalSignature();
             }
         }
@@ -252,8 +275,6 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         return _hashTypedDataV4(structHash);
     }
 }
-
-
 
 
 

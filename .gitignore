@@ -1,6 +1,7 @@
-node_modules/
+﻿node_modules/
 artifacts/
 cache/
 dist/
 .env
 *.log
+typechain-types/

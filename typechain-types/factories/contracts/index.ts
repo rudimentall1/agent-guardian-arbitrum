@@ -5,4 +5,5 @@ export * as interfaces from "./interfaces";
 export * as mocks from "./mocks";
 export { AgentExecutionGuard__factory } from "./AgentExecutionGuard__factory";
 export { AgentRegistry__factory } from "./AgentRegistry__factory";
+export { MockERC1271Owner__factory } from "./MockERC1271Owner__factory";
 export { PolicyRegistry__factory } from "./PolicyRegistry__factory";

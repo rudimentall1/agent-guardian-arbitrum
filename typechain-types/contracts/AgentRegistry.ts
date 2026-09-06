@@ -29,18 +29,21 @@ export declare namespace AgentRegistry {
     active: boolean;
     metadataHash: BytesLike;
     registeredAt: BigNumberish;
+    recoveryAgent: AddressLike;
   };
 
   export type AgentStructOutput = [
     owner: string,
     active: boolean,
     metadataHash: string,
-    registeredAt: bigint
+    registeredAt: bigint,
+    recoveryAgent: string
   ] & {
     owner: string;
     active: boolean;
     metadataHash: string;
     registeredAt: bigint;
+    recoveryAgent: string;
   };
 }
 
@@ -49,11 +52,13 @@ export interface AgentRegistryInterface extends Interface {
     nameOrSignature:
       | "deactivate"
       | "eip712Domain"
+      | "executeRecovery"
       | "getAgent"
       | "isActiveAgent"
       | "ownerOf"
       | "reactivate"
       | "register"
+      | "setRecoveryGuardian"
       | "transferAgentOwnership"
   ): FunctionFragment;
 
@@ -64,6 +69,8 @@ export interface AgentRegistryInterface extends Interface {
       | "AgentReactivated"
       | "AgentRegistered"
       | "EIP712DomainChanged"
+      | "RecoveryExecuted"
+      | "RecoveryGuardianSet"
   ): EventFragment;
 
   encodeFunctionData(
@@ -73,6 +80,10 @@ export interface AgentRegistryInterface extends Interface {
   encodeFunctionData(
     functionFragment: "eip712Domain",
     values?: undefined
+  ): string;
+  encodeFunctionData(
+    functionFragment: "executeRecovery",
+    values: [AddressLike]
   ): string;
   encodeFunctionData(
     functionFragment: "getAgent",
@@ -95,6 +106,10 @@ export interface AgentRegistryInterface extends Interface {
     values: [AddressLike, AddressLike, BytesLike, BytesLike]
   ): string;
   encodeFunctionData(
+    functionFragment: "setRecoveryGuardian",
+    values: [AddressLike, AddressLike]
+  ): string;
+  encodeFunctionData(
     functionFragment: "transferAgentOwnership",
     values: [AddressLike, AddressLike]
   ): string;
@@ -102,6 +117,10 @@ export interface AgentRegistryInterface extends Interface {
   decodeFunctionResult(functionFragment: "deactivate", data: BytesLike): Result;
   decodeFunctionResult(
     functionFragment: "eip712Domain",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "executeRecovery",
     data: BytesLike
   ): Result;
   decodeFunctionResult(functionFragment: "getAgent", data: BytesLike): Result;
@@ -112,6 +131,10 @@ export interface AgentRegistryInterface extends Interface {
   decodeFunctionResult(functionFragment: "ownerOf", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "reactivate", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "register", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "setRecoveryGuardian",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(
     functionFragment: "transferAgentOwnership",
     data: BytesLike
@@ -198,6 +221,32 @@ export namespace EIP712DomainChangedEvent {
   export type LogDescription = TypedLogDescription<Event>;
 }
 
+export namespace RecoveryExecutedEvent {
+  export type InputTuple = [agent: AddressLike, guardian: AddressLike];
+  export type OutputTuple = [agent: string, guardian: string];
+  export interface OutputObject {
+    agent: string;
+    guardian: string;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
+export namespace RecoveryGuardianSetEvent {
+  export type InputTuple = [agent: AddressLike, guardian: AddressLike];
+  export type OutputTuple = [agent: string, guardian: string];
+  export interface OutputObject {
+    agent: string;
+    guardian: string;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
 export interface AgentRegistry extends BaseContract {
   connect(runner?: ContractRunner | null): AgentRegistry;
   waitForDeployment(): Promise<this>;
@@ -259,6 +308,12 @@ export interface AgentRegistry extends BaseContract {
     "view"
   >;
 
+  executeRecovery: TypedContractMethod<
+    [agent: AddressLike],
+    [void],
+    "nonpayable"
+  >;
+
   getAgent: TypedContractMethod<
     [agent: AddressLike],
     [AgentRegistry.AgentStructOutput],
@@ -278,6 +333,12 @@ export interface AgentRegistry extends BaseContract {
       metadataHash: BytesLike,
       signature: BytesLike
     ],
+    [void],
+    "nonpayable"
+  >;
+
+  setRecoveryGuardian: TypedContractMethod<
+    [agent: AddressLike, guardian: AddressLike],
     [void],
     "nonpayable"
   >;
@@ -313,6 +374,9 @@ export interface AgentRegistry extends BaseContract {
     "view"
   >;
   getFunction(
+    nameOrSignature: "executeRecovery"
+  ): TypedContractMethod<[agent: AddressLike], [void], "nonpayable">;
+  getFunction(
     nameOrSignature: "getAgent"
   ): TypedContractMethod<
     [agent: AddressLike],
@@ -337,6 +401,13 @@ export interface AgentRegistry extends BaseContract {
       metadataHash: BytesLike,
       signature: BytesLike
     ],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "setRecoveryGuardian"
+  ): TypedContractMethod<
+    [agent: AddressLike, guardian: AddressLike],
     [void],
     "nonpayable"
   >;
@@ -382,6 +453,20 @@ export interface AgentRegistry extends BaseContract {
     EIP712DomainChangedEvent.InputTuple,
     EIP712DomainChangedEvent.OutputTuple,
     EIP712DomainChangedEvent.OutputObject
+  >;
+  getEvent(
+    key: "RecoveryExecuted"
+  ): TypedContractEvent<
+    RecoveryExecutedEvent.InputTuple,
+    RecoveryExecutedEvent.OutputTuple,
+    RecoveryExecutedEvent.OutputObject
+  >;
+  getEvent(
+    key: "RecoveryGuardianSet"
+  ): TypedContractEvent<
+    RecoveryGuardianSetEvent.InputTuple,
+    RecoveryGuardianSetEvent.OutputTuple,
+    RecoveryGuardianSetEvent.OutputObject
   >;
 
   filters: {
@@ -438,6 +523,28 @@ export interface AgentRegistry extends BaseContract {
       EIP712DomainChangedEvent.InputTuple,
       EIP712DomainChangedEvent.OutputTuple,
       EIP712DomainChangedEvent.OutputObject
+    >;
+
+    "RecoveryExecuted(address,address)": TypedContractEvent<
+      RecoveryExecutedEvent.InputTuple,
+      RecoveryExecutedEvent.OutputTuple,
+      RecoveryExecutedEvent.OutputObject
+    >;
+    RecoveryExecuted: TypedContractEvent<
+      RecoveryExecutedEvent.InputTuple,
+      RecoveryExecutedEvent.OutputTuple,
+      RecoveryExecutedEvent.OutputObject
+    >;
+
+    "RecoveryGuardianSet(address,address)": TypedContractEvent<
+      RecoveryGuardianSetEvent.InputTuple,
+      RecoveryGuardianSetEvent.OutputTuple,
+      RecoveryGuardianSetEvent.OutputObject
+    >;
+    RecoveryGuardianSet: TypedContractEvent<
+      RecoveryGuardianSetEvent.InputTuple,
+      RecoveryGuardianSetEvent.OutputTuple,
+      RecoveryGuardianSetEvent.OutputObject
     >;
   };
 }
