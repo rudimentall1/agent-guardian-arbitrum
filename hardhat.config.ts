@@ -26,11 +26,9 @@ const config: HardhatUserConfig = {
 
     arbitrumSepolia: {
       url: process.env.ARB_SEPOLIA_RPC || "https://sepolia-rollup.arbitrum.io/rpc",
-      accounts: [
-        process.env.PRIVATE_KEY,
-        process.env.AGENT_PRIVATE_KEY,
-        process.env.GUARDIAN_PRIVATE_KEY,
-      ].filter(Boolean) as string[],
+      accounts: process.env.PRIVATE_KEY
+        ? [process.env.PRIVATE_KEY]
+        : [],
       chainId: 421614,
     },
   },

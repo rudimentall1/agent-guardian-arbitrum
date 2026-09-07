@@ -1,12 +1,9 @@
 import { ethers } from "hardhat";
-import fs from "node:fs";
 
 async function main() {
+  const [owner, agent, guardian] = await ethers.getSigners();
 
-  console.log("=== Agent Guardian Arbitrum Sepolia Demo ===");
-
-  const [owner, agent, guardian] =
-    await ethers.getSigners();
+  console.log("=== Agent Guardian Demo ===");
 
   console.log("\nOwner:");
   console.log(owner.address);
@@ -18,194 +15,105 @@ async function main() {
   console.log(guardian.address);
 
 
-  const deployment =
-    JSON.parse(
-      fs.readFileSync(
-        "deployments.json",
-        "utf8"
-      )
-    );
+  const AgentRegistry =
+    await ethers.getContractFactory("AgentRegistry");
+
+  const registry = await AgentRegistry.deploy();
+  await registry.waitForDeployment();
+
+  console.log(
+    "\nAgentRegistry:",
+    await registry.getAddress()
+  );
 
 
-  const registry =
-    await ethers.getContractAt(
-      "AgentRegistry",
-      deployment.contracts.AgentRegistry
-    );
-
+  console.log("\n1. Register agent");
 
   const metadataHash =
     ethers.keccak256(
-      ethers.toUtf8Bytes(
-        "agent-guardian-production-demo"
-      )
+      ethers.toUtf8Bytes("demo-agent")
     );
 
 
-  const network =
-    await ethers.provider.getNetwork();
+  const domain = {
+    name: "AgentRegistry",
+    version: "1",
+    chainId: 31337,
+    verifyingContract: await registry.getAddress()
+  };
 
 
-  /*
-   * 1. REGISTER AGENT
-   */
-
-  console.log("\n1. Checking agent registration...");
-
-  let existing =
-    await registry.getAgent(agent.address);
-
-
-  if (existing.owner === ethers.ZeroAddress) {
-
-    const domain = {
-      name: "AgentRegistry",
-      version: "1",
-      chainId: network.chainId,
-      verifyingContract:
-        deployment.contracts.AgentRegistry
-    };
+  const types = {
+    AgentRegistration: [
+      { name: "agent", type: "address" },
+      { name: "owner", type: "address" },
+      { name: "metadataHash", type: "bytes32" }
+    ]
+  };
 
 
-    const types = {
-      AgentRegistration: [
-        {
-          name: "agent",
-          type: "address"
-        },
-        {
-          name: "owner",
-          type: "address"
-        },
-        {
-          name: "metadataHash",
-          type: "bytes32"
-        }
-      ]
-    };
+  const signature =
+    await agent.signTypedData(
+      domain,
+      types,
+      {
+        agent: agent.address,
+        owner: owner.address,
+        metadataHash
+      }
+    );
 
 
-    const signature =
-      await agent.signTypedData(
-        domain,
-        types,
-        {
-          agent: agent.address,
-          owner: owner.address,
-          metadataHash
-        }
-      );
+  await registry.register(
+    agent.address,
+    owner.address,
+    metadataHash,
+    signature
+  );
 
 
-    await registry.register(
+  console.log("Agent registered");
+
+
+  console.log("\n2. Set recovery guardian");
+
+
+  await registry
+    .connect(owner)
+    .setRecoveryGuardian(
       agent.address,
-      owner.address,
-      metadataHash,
-      signature
+      guardian.address
     );
 
 
-    console.log("✅ Agent registered");
+  console.log("Guardian assigned");
 
 
-  } else {
-
-    console.log("ℹ️ Agent already registered");
-
-  }
+  console.log("\n3. Guardian emergency disable");
 
 
-  /*
-   * refresh data after registration
-   */
-
-  existing =
-    await registry.getAgent(agent.address);
-
-
-  /*
-   * 2. GUARDIAN
-   */
-
-  console.log("\n2. Checking guardian...");
-
-
-  if (existing.recoveryAgent !== guardian.address) {
-
-    await registry
-      .connect(owner)
-      .setRecoveryGuardian(
-        agent.address,
-        guardian.address
-      );
-
-
-    console.log("✅ Guardian assigned");
-
-
-  } else {
-
-    console.log("ℹ️ Guardian already assigned");
-
-  }
-
-
-  /*
-   * 3. RECOVERY
-   */
-
-  console.log("\n3. Recovery status");
-
-
-  const before =
-    await registry.isActiveAgent(
+  await registry
+    .connect(guardian)
+    .executeRecovery(
       agent.address
     );
 
 
-  console.log(
-    "Agent active before:",
-    before
-  );
-
-
-  if (before) {
-
-    await registry
-      .connect(guardian)
-      .executeRecovery(
-        agent.address
-      );
-
-
-    console.log(
-      "✅ Emergency recovery executed"
-    );
-
-
-  } else {
-
-    console.log(
-      "ℹ️ Agent already disabled"
-    );
-
-  }
+  const active =
+    await registry.isActiveAgent(agent.address);
 
 
   console.log(
-    "Agent active after:",
-    await registry.isActiveAgent(
-      agent.address
-    )
+    "Agent active:",
+    active
   );
 
 
-  console.log("\n=== Demo Complete ===");
-
+  console.log("\n=== Demo complete ===");
 }
 
 
-main().catch((e)=>{
- console.error(e);
- process.exitCode = 1;
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });
