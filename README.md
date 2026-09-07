@@ -2,82 +2,85 @@
 
 ## Autonomous Agent Security Layer for Arbitrum
 
-Agent Guardian is a security framework for autonomous AI agents operating on-chain.
+Agent Guardian is an on-chain security framework designed for autonomous AI agents.
 
-The protocol allows AI agents to execute transactions while enforcing strict security boundaries:
-- agent identity verification
-- programmable spending policies
-- transaction authorization
-- replay protection
-- emergency recovery controls
+The protocol creates a programmable security boundary between AI agents and blockchain execution.
 
-Built for the future of autonomous wallets and AI-driven Web3 applications.
+AI agents will control wallets, execute transactions, manage assets and interact with smart contracts.
 
----
+Agent Guardian provides the missing security infrastructure:
 
-# Problem
-
-AI agents will increasingly control wallets, execute trades, manage assets and interact with smart contracts.
-
-Current wallet systems have a critical limitation:
-
-> If an AI agent key is compromised, there is no native security layer between the agent and user funds.
-
-Agent Guardian introduces a programmable security boundary between AI agents and blockchain execution.
-
----
-
-# Solution
-
-Agent Guardian separates:
-
-
-AI Agent
-|
-|
-v
-AgentExecutionGuard
-|
-+----------------+
-| |
-v v
-AgentRegistry PolicyRegistry
-|
-|
-Recovery Guardian
-
-
-The agent never receives unrestricted wallet control.
-
-Every execution is checked against:
-
-- registered agent identity
-- active status
-- owner authorization
-- policy permissions
+- agent identity
+- programmable permissions
+- execution validation
 - spending limits
-- nonce protection
-- emergency recovery state
+- emergency recovery
+
+---
+
+# The Problem
+
+Autonomous AI agents introduce a new security challenge.
+
+If an AI agent wallet key is compromised, traditional wallets provide no native protection layer.
+
+Current systems lack:
+
+- agent identity verification
+- transaction boundaries
+- automated permission control
+- emergency shutdown mechanisms
+
+Agent Guardian solves this by introducing a security firewall between autonomous software and blockchain assets.
+
+---
+
+# Architecture
+
+             AI Agent
+
+                |
+                v
+
+      AgentExecutionGuard
+
+                |
+    +-----------+-----------+
+
+    v                       v
+
+AgentRegistry PolicyRegistry
+
+(identity + owner) (permissions + limits)
+
+                |
+
+                v
+
+         Blockchain Execution
 
 ---
 
 # Core Components
 
+
 ## AgentRegistry
 
-Responsible for:
+Handles autonomous agent identity.
 
-- agent identity lifecycle
-- registration
-- activation/deactivation
-- ownership transfer
-- recovery guardian controls
+Features:
 
-Security properties:
+- agent registration
+- ownership binding
+- lifecycle management
+- guardian recovery controls
+
+Security:
 
 - EIP-712 signed registration
-- anti-front running protection
-- immutable agent identity binding
+- ownership verification
+- replay protection
+
 
 ---
 
@@ -85,80 +88,77 @@ Security properties:
 
 Defines what an agent is allowed to do.
 
-Policies include:
+Policies control:
 
 - allowed contracts
-- allowed function selectors
-- maximum transaction value
-- validity period
-- native transfer permissions
+- allowed functions
+- spending limits
+- execution permissions
+
 
 Example:
 
+Allowed:
 
-Agent can:
+✓ Uniswap router interaction  
+✓ maximum spending amount  
+✓ limited execution window  
 
-✓ call Uniswap router
-✓ spend max 0.1 ETH
-✓ only during active period
 
-Agent cannot:
+Blocked:
 
-✗ transfer unlimited funds
-✗ call unknown contracts
-✗ bypass policy rules
+✗ unlimited transfers  
+✗ unknown contracts  
+✗ unauthorized actions  
 
 
 ---
 
 ## AgentExecutionGuard
 
-The execution firewall.
+The execution security firewall.
 
-Before every transaction:
+Every action is validated through:
 
-Verify agent signature
-Check nonce
-Check deadline
-Verify active agent
-Verify policy ownership
-Validate target + calldata
-Execute transaction
+- agent identity
+- owner authorization
+- nonce protection
+- policy validation
+- target verification
+
 
 Protection against:
 
 - replay attacks
-- modified calldata
-- unauthorized targets
-- unauthorized policies
-- cross-chain replay
-- reentrancy attacks
+- unauthorized execution
+- calldata modification
+- policy abuse
+- reentrancy
+
 
 ---
 
 # Recovery Guardian
 
-Gate 6 introduces emergency recovery controls.
+Autonomous systems require an emergency control layer.
 
 A trusted guardian can disable a compromised agent.
 
-Example:
+Flow:
 
 
-AI agent compromised
+Agent compromised
 
     |
-    v
 
 Recovery Guardian
 
     |
-    v
 
-Agent disabled immediately
+Agent disabled
 
 
-This provides a human-controlled emergency brake for autonomous systems.
+This creates a human-controlled emergency brake for autonomous systems.
 
 ---
 
@@ -172,25 +172,26 @@ Current test coverage:
 
 Implemented security gates:
 
-✅ Gate 4A - Call authorization  
-✅ Gate 4B - Spending limits and owner approvals  
-✅ Gate 5 - Emergency pause controls  
+✅ Gate 4A - Call Authorization  
+✅ Gate 4B - Spending Limits and Owner Approvals  
+✅ Gate 5 - Emergency Security Controls  
 ✅ Gate 6 - Recovery Guardian Controls  
 
-Test categories:
 
+Testing includes:
+
+- signature attacks
 - replay attacks
-- signature manipulation
 - ownership attacks
 - policy abuse
 - unauthorized execution
 - reentrancy attempts
 - cross-agent confusion
-- cross-chain replay
+
 
 ---
 
-# Deployment
+# Live Deployment
 
 Network:
 
@@ -199,12 +200,15 @@ Arbitrum Sepolia
 Chain ID: 421614
 
 
+
 Contracts:
+
 
 ## AgentRegistry
 
 
 0x249761b2F52258e74C91F5CD345Bd9C447aD18F3
+
 
 
 ## PolicyRegistry
@@ -213,85 +217,73 @@ Contracts:
 0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87
 
 
+
 ## AgentExecutionGuard
 
 
 0x8845f20D83dAD3a494073F1AE1aEB6F9f85146AD
 
 
+
 ---
 
-# Local Development
-
-Install:
-
-```bash
-npm install
-
-Run tests:
-
-npm test
-
-Deploy:
-
-npx hardhat run scripts/deploy.ts --network arbitrumSepolia
-Vision
-
-Agent Guardian is designed as a security layer for the next generation of autonomous agents.
-
-As AI agents become financial actors, they need:
-
-identity
-permissions
-limits
-recovery mechanisms
-
-Agent Guardian provides the missing security infrastructure between autonomous intelligence and blockchain assets
-
-## Demo
+# Demo
 
 Run:
 
 ```bash
-npx hardhat run scripts/demo.ts
-```
+npx hardhat run scripts/demo.ts --network arbitrumSepolia
 
-Output:
+Demo result:
 
-Agent registered  
-Guardian assigned  
-Agent active: false
+Agent registered
 
+Guardian assigned
 
-## Architecture
+Agent active before: true
 
-AgentRegistry
-- agent identity
-- ownership lifecycle
-- recovery guardian controls
+Emergency recovery executed
 
-PolicyRegistry
-- programmable permissions
-- spending limits
-- authorized targets
+Agent active after: false
+Roadmap
+Phase 1 — Hackathon MVP
 
-AgentExecutionGuard
-- EIP-712 signed intents
-- nonce protection
-- replay prevention
-- policy enforcement
+Completed:
 
+✅ Agent identity
+✅ Policy system
+✅ Execution guard
+✅ Recovery guardian
+✅ Arbitrum deployment
 
-## Deployment
+Phase 2 — Advanced Security
 
-Network:
-Arbitrum Sepolia
+Future:
 
-AgentRegistry:
-0x249761b2F52258e74C91F5CD345Bd9C447aD18F3
+multi guardian recovery
+advanced spending controls
+risk scoring
+automated threat detection
+Phase 3 — Autonomous Economy Infrastructure
 
-PolicyRegistry:
-0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87
+Future:
 
-AgentExecutionGuard:
-0x8845f0D83dAD3a494073F1AE1aEB6F9f85146AD
+AI treasury security
+enterprise agents
+wallet integrations
+zero knowledge authorization
+Vision
+
+Agent Guardian aims to become a security standard for autonomous AI agents operating on blockchain networks.
+
+As AI agents become economic actors, they need:
+
+Identity.
+
+Permissions.
+
+Limits.
+
+Recovery.
+
+Agent Guardian provides the security layer between autonomous intelligence and blockchain assets.
