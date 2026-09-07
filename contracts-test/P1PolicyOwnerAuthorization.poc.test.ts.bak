@@ -1,0 +1,277 @@
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+
+describe("P1: PolicyRegistry policy-owner authorization", function () {
+  async function deployFixture() {
+    const [owner, newOwner, attacker, agentWallet] = await ethers.getSigners();
+
+    const AgentRegistry = await ethers.getContractFactory("AgentRegistry");
+    const registry = await AgentRegistry.deploy();
+    await registry.waitForDeployment();
+
+    const PolicyRegistry = await ethers.getContractFactory("PolicyRegistry");
+    const policyRegistry = await PolicyRegistry.deploy(await registry.getAddress());
+    await policyRegistry.waitForDeployment();
+
+    const AgentExecutionGuard = await ethers.getContractFactory("AgentExecutionGuard");
+    const guard = await AgentExecutionGuard.deploy(
+      await registry.getAddress(),
+      await policyRegistry.getAddress()
+    );
+    await guard.waitForDeployment();
+
+    return { registry, policyRegistry, guard, owner, newOwner, attacker, agentWallet };
+  }
+
+  describe("PHASE 2 PoC", function () {
+    it("— a malicious/compromised agent's self-created permissive policy is rejected", async function () {
+      const { registry, policyRegistry, guard, owner, attacker, agentWallet } = await loadFixture(deployFixture);
+
+      // Register the agent
+      const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("agent-v1"));
+      const domain = {
+        name: "AgentRegistry",
+        version: "1",
+        chainId: (await ethers.provider.getNetwork()).chainId,
+        verifyingContract: await registry.getAddress(),
+      };
+      const types = {
+        AgentRegistration: [
+          { name: "agent", type: "address" },
+          { name: "owner", type: "address" },
+          { name: "metadataHash", type: "bytes32" },
+        ],
+      };
+      const sig = await agentWallet.signTypedData(domain, types, {
+        agent: agentWallet.address,
+        owner: owner.address,
+        metadataHash,
+      });
+      await registry.register(agentWallet.address, owner.address, metadataHash, sig);
+
+      // Attacker tries to create a permissive policy
+      const salt = ethers.hexlify(ethers.randomBytes(32));
+      const targets = [attacker.address];
+      const selectors = ["0x00000000"];
+
+      await expect(
+        policyRegistry.connect(attacker).createPolicy(
+          agentWallet.address,
+          salt,
+          targets,
+          selectors,
+          [],
+          ethers.parseEther("1000"),
+          ethers.parseEther("100"),
+          ethers.parseEther("10"),
+          0,
+          ethers.MaxUint256
+        )
+      ).to.be.revertedWithCustomError(policyRegistry, "NotAuthorized");
+    });
+  });
+
+  describe("positive control", function () {
+    it("the legitimate owner's OWN restrictive policy still executes correctly", async function () {
+      const { registry, policyRegistry, guard, owner, agentWallet } = await loadFixture(deployFixture);
+
+      // Register agent
+      const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("agent-v1"));
+      const domain = {
+        name: "AgentRegistry",
+        version: "1",
+        chainId: (await ethers.provider.getNetwork()).chainId,
+        verifyingContract: await registry.getAddress(),
+      };
+      const types = {
+        AgentRegistration: [
+          { name: "agent", type: "address" },
+          { name: "owner", type: "address" },
+          { name: "metadataHash", type: "bytes32" },
+        ],
+      };
+      const sig = await agentWallet.signTypedData(domain, types, {
+        agent: agentWallet.address,
+        owner: owner.address,
+        metadataHash,
+      });
+      await registry.register(agentWallet.address, owner.address, metadataHash, sig);
+
+      // Owner creates a restrictive policy
+      const salt = ethers.hexlify(ethers.randomBytes(32));
+      const targets = [guard.target];
+      const selectors = ["0x00000000"];
+      const maxTxValue = ethers.parseEther("1");
+      const dailyLimit = ethers.parseEther("100");
+      const approvalThreshold = ethers.parseEther("0.1");
+
+      await policyRegistry.connect(owner).createPolicy(
+        agentWallet.address,
+        salt,
+        targets,
+        selectors,
+        [],
+        maxTxValue,
+        dailyLimit,
+        approvalThreshold,
+        0,
+        ethers.MaxUint256
+      );
+
+      const policyHash = await policyRegistry.getPolicyHash(
+        agentWallet.address,
+        salt,
+        targets,
+        selectors,
+        [],
+        maxTxValue,
+        dailyLimit,
+        approvalThreshold,
+        0,
+        ethers.MaxUint256
+      );
+
+      // Execute with the restrictive policy
+      const intentDomain = {
+        name: "AgentExecutionGuard",
+        version: "1",
+        chainId: (await ethers.provider.getNetwork()).chainId,
+        verifyingContract: await guard.getAddress(),
+      };
+      const intentTypes = {
+        ExecutionIntent: [
+          { name: "agent", type: "address" },
+          { name: "wallet", type: "address" },
+          { name: "target", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "calldataHash", type: "bytes32" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+          { name: "policyHash", type: "bytes32" },
+        ],
+      };
+      const nonce = 0;
+      const deadline = ethers.MaxUint256;
+      const calldataHash = ethers.keccak256("0x");
+      const intentSig = await agentWallet.signTypedData(intentDomain, intentTypes, {
+        agent: agentWallet.address,
+        wallet: owner.address,
+        target: guard.target,
+        value: 0,
+        calldataHash,
+        nonce,
+        deadline,
+        policyHash,
+      });
+
+      await expect(
+        guard.connect(owner).execute(
+          agentWallet.address,
+          owner.address,
+          guard.target,
+          0,
+          "0x",
+          nonce,
+          deadline,
+          policyHash,
+          intentSig,
+          { value: 0 }
+        )
+      ).to.not.be.reverted;
+    });
+  });
+
+  it("attacker cannot spoof msg.sender", async function () {
+    const { registry, policyRegistry, owner, attacker, agentWallet } = await loadFixture(deployFixture);
+
+    // Register agent
+    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("agent-v1"));
+    const domain = {
+      name: "AgentRegistry",
+      version: "1",
+      chainId: (await ethers.provider.getNetwork()).chainId,
+      verifyingContract: await registry.getAddress(),
+    };
+    const types = {
+      AgentRegistration: [
+        { name: "agent", type: "address" },
+        { name: "owner", type: "address" },
+        { name: "metadataHash", type: "bytes32" },
+      ],
+    };
+    const sig = await agentWallet.signTypedData(domain, types, {
+      agent: agentWallet.address,
+      owner: owner.address,
+      metadataHash,
+    });
+    await registry.register(agentWallet.address, owner.address, metadataHash, sig);
+
+    // Attacker tries to create a policy
+    const salt = ethers.hexlify(ethers.randomBytes(32));
+    const targets = [attacker.address];
+    const selectors = ["0x00000000"];
+
+    await expect(
+      policyRegistry.connect(attacker).createPolicy(
+        agentWallet.address,
+        salt,
+        targets,
+        selectors,
+        [],
+        ethers.parseEther("1000"),
+        ethers.parseEther("100"),
+        ethers.parseEther("10"),
+        0,
+        ethers.MaxUint256
+      )
+    ).to.be.revertedWithCustomError(policyRegistry, "NotAuthorized");
+  });
+
+  it("a total stranger cannot author a usable policy", async function () {
+    const { registry, policyRegistry, owner, attacker, agentWallet } = await loadFixture(deployFixture);
+
+    // Register agent
+    const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("agent-v1"));
+    const domain = {
+      name: "AgentRegistry",
+      version: "1",
+      chainId: (await ethers.provider.getNetwork()).chainId,
+      verifyingContract: await registry.getAddress(),
+    };
+    const types = {
+      AgentRegistration: [
+        { name: "agent", type: "address" },
+        { name: "owner", type: "address" },
+        { name: "metadataHash", type: "bytes32" },
+      ],
+    };
+    const sig = await agentWallet.signTypedData(domain, types, {
+      agent: agentWallet.address,
+      owner: owner.address,
+      metadataHash,
+    });
+    await registry.register(agentWallet.address, owner.address, metadataHash, sig);
+
+    // Stranger tries to create a policy
+    const salt = ethers.hexlify(ethers.randomBytes(32));
+    const targets = [attacker.address];
+    const selectors = ["0x00000000"];
+
+    await expect(
+      policyRegistry.connect(attacker).createPolicy(
+        agentWallet.address,
+        salt,
+        targets,
+        selectors,
+        [],
+        ethers.parseEther("1000"),
+        ethers.parseEther("100"),
+        ethers.parseEther("10"),
+        0,
+        ethers.MaxUint256
+      )
+    ).to.be.revertedWithCustomError(policyRegistry, "NotAuthorized");
+  });
+});
