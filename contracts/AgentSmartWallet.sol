@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+/// @title AgentSmartWallet
+/// @notice Minimal owner-controlled custody layer. The execution guard is the
+/// only address allowed to make agent-authorized external calls.
+contract AgentSmartWallet is ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    address public owner;
+    address public executionGuard;
+
+    error ZeroAddress();
+    error NotOwner();
+    error NotExecutionGuard();
+    error CallFailed(bytes returndata);
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event ExecutionGuardChanged(address indexed previousGuard, address indexed newGuard);
+    event Executed(address indexed target, uint256 value, bytes data);
+    event NativeRecovered(address indexed to, uint256 amount);
+    event ERC20Recovered(address indexed token, address indexed to, uint256 amount);
+
+    constructor(address initialOwner, address initialExecutionGuard) {
+        if (initialOwner == address(0) || initialExecutionGuard == address(0)) revert ZeroAddress();
+        owner = initialOwner;
+        executionGuard = initialExecutionGuard;
+        emit OwnershipTransferred(address(0), initialOwner);
+        emit ExecutionGuardChanged(address(0), initialExecutionGuard);
+    }
+
+    receive() external payable {}
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    modifier onlyExecutionGuard() {
+        if (msg.sender != executionGuard) revert NotExecutionGuard();
+        _;
+    }
+
+    /// @notice Execute an external call using assets held by this wallet.
+    /// @dev Agent authorization must happen in AgentExecutionGuard before this call.
+    function execute(address target, uint256 value, bytes calldata data)
+        external
+        onlyExecutionGuard
+        nonReentrant
+        returns (bytes memory returndata)
+    {
+        if (target == address(0)) revert ZeroAddress();
+
+        (bool success, bytes memory ret) = target.call{value: value}(data);
+        if (!success) revert CallFailed(ret);
+
+        emit Executed(target, value, data);
+        return ret;
+    }
+
+    function setExecutionGuard(address newGuard) external onlyOwner {
+        if (newGuard == address(0)) revert ZeroAddress();
+        address previous = executionGuard;
+        executionGuard = newGuard;
+        emit ExecutionGuardChanged(previous, newGuard);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        address previous = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previous, newOwner);
+    }
+
+    function recoverNative(address payable to, uint256 amount) external onlyOwner nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        (bool success, bytes memory ret) = to.call{value: amount}("");
+        if (!success) revert CallFailed(ret);
+        emit NativeRecovered(to, amount);
+    }
+
+    function recoverERC20(address token, address to, uint256 amount) external onlyOwner nonReentrant {
+        if (token == address(0) || to == address(0)) revert ZeroAddress();
+        IERC20(token).safeTransfer(to, amount);
+        emit ERC20Recovered(token, to, amount);
+    }
+}
