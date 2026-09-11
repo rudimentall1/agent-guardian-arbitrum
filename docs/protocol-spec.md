@@ -10,9 +10,17 @@ Agent Guardian is an authorization and security layer for autonomous financial a
 
 The agent proposes an exact operation and signs an execution intent. The agent is not trusted with unrestricted wallet authority.
 
-### Guardian intelligence
+### Guardian intelligence — PLANNED, NOT IMPLEMENTED IN THIS REPOSITORY
 
-The off-chain Guardian evaluates risk using wallet intelligence, reputation, simulation, threat intelligence and policy context. Its output is evidence for authorization, not authorization itself.
+The design target is an off-chain Guardian that evaluates risk using
+wallet intelligence, reputation, simulation, threat intelligence and
+policy context, whose output would be evidence for authorization, not
+authorization itself. No such service exists in this codebase today —
+there is no off-chain component of any kind here. Every authorization
+decision currently made by this protocol is produced deterministically
+by the on-chain Execution Guard described below, with no AI or
+off-chain risk-scoring input. Treat this section as roadmap, not as a
+description of current behavior.
 
 ### Execution Guard
 
@@ -20,7 +28,11 @@ The on-chain Execution Guard is the final authorization boundary. It validates i
 
 ### Underlying chain
 
-Arbitrum or Robinhood Chain executes only after the guard accepts the intent.
+Arbitrum executes only after the guard accepts the intent. Robinhood
+Chain is a planned additional target — there is no network
+configuration, deployment, or address for it in this repository yet;
+see `hardhat.config.ts` and `deployments.json` for what is actually
+live.
 
 ## 3. Intent
 

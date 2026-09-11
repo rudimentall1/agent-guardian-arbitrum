@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { deploySmartWallet, fundSmartWallet } from "./smartWalletTestHelpers";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 /**
@@ -23,7 +24,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   let ownerA: HardhatEthersSigner;
   let ownerB: HardhatEthersSigner;
   let stranger: HardhatEthersSigner;
-  let wallet: HardhatEthersSigner;
+  let wallet: any;
   let agentA: ReturnType<typeof ethers.Wallet.createRandom>;
 
   const FAR_DEADLINE = 4102444800n;
@@ -59,17 +60,27 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
 
   async function signIntent(signer: any, p: Intent) {
     const d = await intentDomain();
-    return signer.signTypedData(d, intentTypes, {
-      agent: p.agent, wallet: p.wallet, target: p.target, value: p.value,
-      calldataHash: ethers.keccak256(p.data), nonce: p.nonce, deadline: p.deadline, policyHash: p.policyHash,
-    });
-  }
 
+    const value = {
+      agent: p.agent,
+      wallet: p.wallet,
+      target: p.target,
+      value: p.value,
+      calldataHash: ethers.keccak256(p.data),
+      nonce: p.nonce,
+      deadline: p.deadline,
+      policyHash: p.policyHash,
+    };
+
+    const digest = ethers.TypedDataEncoder.hash(d, intentTypes, value);
+    const signature = signer.signingKey.sign(digest);
+
+    return ethers.Signature.from(signature).serialized;
+  }
   async function submit(intent: Intent, sig: string, sender: any = agentA) {
     return guard.connect(sender).execute(
       intent.agent, intent.wallet, intent.target, intent.value, intent.data,
       intent.nonce, intent.deadline, intent.policyHash, sig,
-      { value: intent.value }
     );
   }
 
@@ -90,7 +101,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   }
 
   beforeEach(async function () {
-    [ownerA, ownerB, stranger, wallet] = await ethers.getSigners();
+    [ownerA, ownerB, stranger] = await ethers.getSigners();
     agentA = ethers.Wallet.createRandom().connect(ethers.provider);
     await ethers.provider.send("hardhat_setBalance", [agentA.address, "0x" + ethers.parseEther("1000").toString(16)]);
 
@@ -116,6 +127,8 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     guard = await Guard.deploy(agentRegistryAddress, policyRegistryAddress);
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
+    wallet = await deploySmartWallet(ownerA.address, guardAddress);
+    await fundSmartWallet(wallet, ethers.parseEther("100"));
 
     const RecordingTarget = await ethers.getContractFactory("RecordingTarget");
     target = await RecordingTarget.deploy();
@@ -126,7 +139,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   // 1. Owner A + Agent A + Policy A -> execute PASS.
   it("1. Owner A + Agent A + Policy A -> execute PASS", async function () {
     const { policyHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     await submit(intent, sig);
     expect(await guard.nextNonce(agentA.address)).to.equal(1n);
@@ -140,7 +153,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   describe("2. ownership transfer -> old Policy A must REVERT", function () {
     it("2a. immediately after transfer (before reactivation): AgentNotActive", async function () {
       const { policyHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
-      const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+      const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agentA, intent);
 
       await agentRegistry.connect(ownerA).transferAgentOwnership(agentA.address, ownerB.address);
@@ -150,10 +163,11 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
 
     it("2b. after Owner B reactivates: PolicyOwnerMismatch (the load-bearing P1 case)", async function () {
       const { policyHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
-      const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+      const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agentA, intent);
 
       await agentRegistry.connect(ownerA).transferAgentOwnership(agentA.address, ownerB.address);
+      await wallet.connect(ownerA).transferOwnership(ownerB.address);
       await agentRegistry.connect(ownerB).reactivate(agentA.address);
 
       await expect(submit(intent, sig))
@@ -165,10 +179,11 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   // 3. Owner B creates Policy B for the same Agent A -> execute PASS.
   it("3. Owner B creates Policy B for the same Agent A -> execute PASS", async function () {
     await agentRegistry.connect(ownerA).transferAgentOwnership(agentA.address, ownerB.address);
+    await wallet.connect(ownerA).transferOwnership(ownerB.address);
     await agentRegistry.connect(ownerB).reactivate(agentA.address);
 
     const { policyHash } = await createPolicy(ownerB, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-B")));
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     await submit(intent, sig);
     expect(await guard.nextNonce(agentA.address)).to.equal(1n);
@@ -178,11 +193,12 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   // losing ownership -> must NOT obtain execution authority.
   it("4. Owner A creates a NEW policy after losing ownership -> creation succeeds, execution REVERTs", async function () {
     await agentRegistry.connect(ownerA).transferAgentOwnership(agentA.address, ownerB.address);
+    await wallet.connect(ownerA).transferOwnership(ownerB.address);
     await agentRegistry.connect(ownerB).reactivate(agentA.address);
 
     const { policyHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A-post-transfer")));
 
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     await expect(submit(intent, sig))
       .to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch")
@@ -195,7 +211,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const salt = ethers.keccak256(ethers.toUtf8Bytes("attacker-policy"));
     const { policyHash } = await createPolicy(agentA, agentA.address, salt, ethers.parseEther("1000"));
 
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: ethers.parseEther("500"), data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: ethers.parseEther("500"), data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     await expect(submit(intent, sig))
       .to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch")
@@ -208,7 +224,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const salt = ethers.keccak256(ethers.toUtf8Bytes("stranger-policy"));
     const { policyHash } = await createPolicy(stranger, agentA.address, salt, ethers.parseEther("1000"));
 
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     await expect(submit(intent, sig))
       .to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch")
@@ -220,7 +236,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const { policyHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
     await agentRegistry.connect(ownerA).deactivate(agentA.address);
 
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     await expect(submit(intent, sig)).to.be.revertedWithCustomError(guard, "AgentNotActive");
   });
@@ -229,10 +245,11 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
   // policies belonging to the previous owner.
   it("8. Repeated reactivation cycles never revive the old owner's policy", async function () {
     const { policyHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
 
     await agentRegistry.connect(ownerA).transferAgentOwnership(agentA.address, ownerB.address);
+    await wallet.connect(ownerA).transferOwnership(ownerB.address);
     await agentRegistry.connect(ownerB).reactivate(agentA.address);
     await expect(submit(intent, sig)).to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch");
 
@@ -254,6 +271,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const ownerBefore = await policyRegistry.ownerOf(policyId);
 
     await agentRegistry.connect(ownerA).transferAgentOwnership(agentA.address, ownerB.address);
+    await wallet.connect(ownerA).transferOwnership(ownerB.address);
     await agentRegistry.connect(ownerB).reactivate(agentA.address);
 
     const ownerAfter = await policyRegistry.ownerOf(policyId);
@@ -269,7 +287,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const { policyHash: attackerHash } = await createPolicy(agentA, agentA.address, salt, ethers.parseEther("1000"));
     const { policyHash: legitHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
 
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: attackerHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: attackerHash };
     const sig = await signIntent(agentA, intent);
 
     const substituted = { ...intent, policyHash: legitHash };
@@ -283,7 +301,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const otherTarget = await RecordingTarget.deploy();
     await otherTarget.waitForDeployment();
 
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
     const tampered = { ...intent, target: await otherTarget.getAddress() };
     await expect(submit(tampered, sig)).to.be.reverted;
@@ -295,7 +313,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const { policyHash } = await createPolicy(agentA, agentA.address, salt, ethers.parseEther("1000"));
 
     for (const nonce of [0n, 1n, 1_000_000n]) {
-      const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce, deadline: FAR_DEADLINE, policyHash };
+      const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce, deadline: FAR_DEADLINE, policyHash };
       const sig = await signIntent(agentA, intent);
       await expect(submit(intent, sig))
         .to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch")
@@ -322,7 +340,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const attackerSalt = ethers.keccak256(ethers.toUtf8Bytes("reentry-attacker-policy"));
     const { policyHash: reentryHash } = await createPolicy(agentA, agentA.address, attackerSalt, ethers.parseEther("1000"));
 
-    const reentryIntent: Intent = { agent: agentA.address, wallet: wallet.address, target: attackerAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: reentryHash };
+    const reentryIntent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: attackerAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: reentryHash };
     const reentrySig = await signIntent(agentA, reentryIntent);
     const reentryCalldata = guard.interface.encodeFunctionData("execute", [
       reentryIntent.agent, reentryIntent.wallet, reentryIntent.target, reentryIntent.value,
@@ -330,7 +348,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     ]);
     await attacker.setReentryCalldata(reentryCalldata);
 
-    const outerIntent: Intent = { agent: agentA.address, wallet: wallet.address, target: attackerAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: outerPolicyHash };
+    const outerIntent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: attackerAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: outerPolicyHash };
     const outerSig = await signIntent(agentA, outerIntent);
     await submit(outerIntent, outerSig);
 
@@ -346,7 +364,7 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     const { policyHash } = await createPolicy(agentA, agentA.address, salt, ethers.parseEther("1000"));
 
     const value = ethers.parseEther("5");
-    const intent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
+    const intent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash };
     const sig = await signIntent(agentA, intent);
 
     const balanceBefore = await ethers.provider.getBalance(targetAddress);
@@ -358,9 +376,11 @@ describe("FINAL HOSTILE REVIEW: policy-owner authorization (real stack, no mocks
     expect(await ethers.provider.getBalance(guardAddress)).to.equal(0n);
 
     const { policyHash: legitHash } = await createPolicy(ownerA, agentA.address, ethers.keccak256(ethers.toUtf8Bytes("policy-A")));
-    const legitIntent: Intent = { agent: agentA.address, wallet: wallet.address, target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: legitHash };
+    const legitIntent: Intent = { agent: agentA.address, wallet: await wallet.getAddress(), target: targetAddress, value: 0n, data: "0x", nonce: 0n, deadline: FAR_DEADLINE, policyHash: legitHash };
     const legitSig = await signIntent(agentA, legitIntent);
     await submit(legitIntent, legitSig);
     expect(await guard.nextNonce(agentA.address)).to.equal(1n);
   });
 });
+
+

@@ -1,292 +1,158 @@
-\# Agent Guardian Security Model
+# Agent Guardian Security Model
 
-
-
-\## Security Goal
-
-
+## Security Goal
 
 Agent Guardian protects autonomous blockchain agents from unauthorized, unsafe or compromised execution.
 
-
-
 The protocol assumes that AI agents will eventually manage valuable assets and therefore require programmable security boundaries.
 
+---
 
+# Threat Model
 
-\---
-
-
-
-\# Threat Model
-
-
-
-\## 1. Compromised Agent
-
-
+## 1. Compromised Agent
 
 Scenario:
-
-
 
 An AI agent private key is leaked or the agent starts behaving incorrectly.
 
-
-
 Risk:
 
+- unauthorized transactions
 
+- asset loss
 
-\- unauthorized transactions
-
-\- asset loss
-
-\- malicious interactions
-
-
+- malicious interactions
 
 Protection:
-
-
 
 Agent Guardian allows an authorized guardian to immediately disable the agent.
 
+---
 
-
-\---
-
-
-
-\## 2. Excessive Permissions
-
-
+## 2. Excessive Permissions
 
 Scenario:
-
-
 
 An agent receives unlimited wallet permissions.
 
-
-
 Risk:
-
-
 
 A single mistake can create catastrophic financial damage.
 
-
-
 Protection:
-
-
 
 PolicyRegistry defines:
 
+- allowed actions
 
+- approved targets
 
-\- allowed actions
+- spending limits
 
-\- approved targets
+- execution rules
 
-\- spending limits
+---
 
-\- execution rules
-
-
-
-\---
-
-
-
-\## 3. Malicious Automation
-
-
+## 3. Malicious Automation
 
 Scenario:
 
-
-
 An autonomous system executes unintended actions repeatedly.
-
-
 
 Risk:
 
-
-
 Loss of funds through automated mistakes.
-
-
 
 Protection:
 
-
-
 Execution Guard validates every operation before execution.
 
+---
 
+# Security Architecture
 
-\---
-
-
-
-\# Security Architecture
-
-
-
-\## AgentRegistry
-
-
+## AgentRegistry
 
 Provides:
 
+- agent identity
 
+- ownership binding
 
-\- agent identity
+- lifecycle status
 
-\- ownership binding
+- guardian assignment
 
-\- lifecycle status
-
-\- guardian assignment
-
-
-
-
-
-\## PolicyRegistry
-
-
+## PolicyRegistry
 
 Provides:
 
+- programmable permissions
 
+- authorization rules
 
-\- programmable permissions
+- spending constraints
 
-\- authorization rules
-
-\- spending constraints
-
-
-
-
-
-\## AgentExecutionGuard
-
-
+## AgentExecutionGuard
 
 Provides:
 
+- transaction validation
 
+- signature verification
 
-\- transaction validation
+- nonce protection
 
-\- signature verification
+- policy enforcement
 
-\- nonce protection
+---
 
-\- policy enforcement
-
-
-
-
-
-\---
-
-
-
-\# Emergency Recovery
-
-
+# Emergency Recovery
 
 Guardian flow:
 
-
-
-
-
 Agent active
-
-
 
 &#x20;   |
 
 &#x20;   v
-
-
 
 Suspicious activity detected
 
-
-
 &#x20;   |
 
 &#x20;   v
-
-
 
 Guardian executes recovery
 
-
-
 &#x20;   |
 
 &#x20;   v
 
-
-
 Agent disabled
-
-
-
-
 
 Result:
 
-
-
 The compromised agent can no longer execute protected operations.
 
+---
 
+# Security Principles
 
-\---
-
-
-
-\# Security Principles
-
-
-
-\## Least Privilege
-
-
+## Least Privilege
 
 Agents receive only required permissions.
 
-
-
-\## Human Control Boundary
-
-
+## Human Control Boundary
 
 Humans remain the final security authority.
 
-
-
-\## Immutable Verification
-
-
+## Immutable Verification
 
 All critical actions are recorded on-chain.
 
-
-
-\## Fail Safe
-
-
+## Fail Safe
 
 When compromise is detected, the system moves into a secure disabled state.
 

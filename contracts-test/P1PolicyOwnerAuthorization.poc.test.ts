@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+import { deploySmartWallet, fundSmartWallet } from "./smartWalletTestHelpers";
 
 describe("P1: PolicyRegistry policy-owner authorization", function () {
   async function deployFixture() {
@@ -19,11 +20,14 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
     const guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
     await guard.waitForDeployment();
 
+    const smartWallet = await deploySmartWallet(owner.address, await guard.getAddress());
+    await fundSmartWallet(smartWallet, ethers.parseEther("100"));
+
     const RecordingTarget = await ethers.getContractFactory("RecordingTarget");
     const recordingTarget = await RecordingTarget.deploy();
     await recordingTarget.waitForDeployment();
 
-    return { registry, policyRegistry, guard, owner, attacker, agentWallet, recordingTarget };
+    return { registry, policyRegistry, guard, owner, attacker, agentWallet, recordingTarget, smartWallet };
   }
 
   async function register(
@@ -85,7 +89,7 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
   }
 
   it("attacker can create a policy for someone else's agent, but the policy cannot obtain execution authority", async function () {
-    const { registry, policyRegistry, guard, owner, attacker, agentWallet } = await loadFixture(deployFixture);
+    const { registry, policyRegistry, guard, owner, attacker, agentWallet, smartWallet } = await loadFixture(deployFixture);
     await register(registry, agentWallet, owner);
 
     const salt = ethers.keccak256(ethers.toUtf8Bytes("attacker-policy"));
@@ -108,12 +112,12 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
     expect(await policyRegistry.isPolicyActive(policyId)).to.equal(true);
 
     const value = ethers.parseEther("1");
-    const sig = await signIntent(guard, agentWallet, owner.address, attacker.address, value, policyHash);
+    const sig = await signIntent(guard, agentWallet, await smartWallet.getAddress(), attacker.address, value, policyHash);
 
     await expect(
       guard.connect(owner).execute(
         agentWallet.address,
-        owner.address,
+        await smartWallet.getAddress(),
         attacker.address,
         value,
         "0x",
@@ -121,7 +125,6 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
         4102444800n,
         policyHash,
         sig,
-        { value }
       )
     )
       .to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch")
@@ -131,7 +134,7 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
   });
 
   it("legitimate owner can create and use policy", async function () {
-    const { registry, policyRegistry, guard, owner, agentWallet, recordingTarget } = await loadFixture(deployFixture);
+    const { registry, policyRegistry, guard, owner, agentWallet, recordingTarget, smartWallet } = await loadFixture(deployFixture);
     await register(registry, agentWallet, owner);
 
     const target = await recordingTarget.getAddress();
@@ -154,12 +157,12 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
 
     const policyId = await policyRegistry.computePolicyId(owner.address, salt);
     const policyHash = await policyRegistry.policyHashOf(policyId);
-    const intentSig = await signIntent(guard, agentWallet, owner.address, target, 0n, policyHash);
+    const intentSig = await signIntent(guard, agentWallet, await smartWallet.getAddress(), target, 0n, policyHash);
 
     await expect(
       guard.connect(owner).execute(
         agentWallet.address,
-        owner.address,
+        await smartWallet.getAddress(),
         target,
         0n,
         "0x",
@@ -167,7 +170,6 @@ describe("P1: PolicyRegistry policy-owner authorization", function () {
         4102444800n,
         policyHash,
         intentSig,
-        { value: 0n }
       )
     ).to.not.be.reverted;
 

@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  hardhat:
+  test:
+    name: Compile + test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,3 +31,55 @@ jobs:
 
       - name: Run test suite
         run: npm test
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run coverage
+        run: npm run coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  static-analysis:
+    name: Slither
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npm run compile
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.0
+        id: slither
+        with:
+          node-version: 22
+          fail-on: high
+          slither-args: --filter-paths "node_modules|typechain-types" --exclude-dependencies

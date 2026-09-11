@@ -1,34 +1,14 @@
-\# Demo Evidence
+# Demo Evidence — NOT YET PROVIDED
 
+This folder currently contains no screenshots or recordings — only this
+placeholder. Before submitting, add:
 
+- deployment.png (a screenshot of the verified contract on Arbiscan)
+- demo-success.png (a screenshot or terminal capture of a successful
+  end-to-end run — e.g. `npx hardhat run scripts/demo.ts` output, or the
+  new wallet-custody flow)
+- contract-addresses.png (or just link `deployments.json` directly —
+  see `README.md`, "Deployment")
 
-This folder contains screenshots and visual evidence of the Agent Guardian MVP.
-
-
-
-Expected files:
-
-
-
-\- deployment.png
-
-\- demo-success.png
-
-\- contract-addresses.png
-
-
-
-Network:
-
-
-
-Arbitrum Sepolia
-
-
-
-Chain ID:
-
-
-
-421614
+Network: Arbitrum Sepolia, chain ID 421614.
 

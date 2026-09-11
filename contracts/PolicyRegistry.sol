@@ -47,12 +47,20 @@ pragma solidity 0.8.24;
 ///    also silently authorize plain ETH transfers to that target, or
 ///    vice versa. See the ADR, "empty calldata semantics".
 ///
-/// 4. `dailyLimit` and `approvalThreshold` remain stored declared limits
-///    only, not enforced here or anywhere in this repository yet — see
-///    contract-level NatSpec point 3 in the pre-Gate-4A version of this
-///    file (docs/gate-3-policy-registry.md) and
-///    docs/gate-4a-call-authorization.md for current status. `maxTxValue`
-///    IS enforced starting this gate, via `checkAuthorization` below.
+/// 4. `dailyLimit` and `approvalThreshold` are stored here but enforced
+///    in `AgentExecutionGuard`, not in this contract — this contract only
+///    exposes them via `getMandate`. As of Gate 4B, both ARE actively
+///    enforced: `AgentExecutionGuard._execute` checks cumulative
+///    same-UTC-day native spend against `dailyLimit` and requires an
+///    owner-signed approval whenever `value > approvalThreshold`. (An
+///    earlier version of this comment, carried over from the pre-Gate-4A
+///    `docs/gate-3-policy-registry.md` snapshot, said these were "not
+///    enforced ... yet" — that was accurate for Gate 3/4A but is stale
+///    now; see docs/adr/0007-gate4b-spending-limits-and-approvals.md and
+///    `contracts-test/AgentExecutionGuard.test.ts`, "Gate 4B: daily
+///    limits and owner approvals", for the enforcement and its tests.)
+///    `maxTxValue` is enforced in this contract's own `checkAuthorization`
+///    below, and has been since Gate 4A.
 ///
 /// 5. No ownership transfer, and the on-chain identifier is
 ///    `keccak256(abi.encode(owner, salt))` — unchanged from Gate 3, see
@@ -123,6 +131,7 @@ contract PolicyRegistry {
     error InvalidTimeWindow(uint64 validFrom, uint64 validUntil);
     error ZeroAddress();
     error EmptyAuthorization();
+    error UnreachableNativeTransferAuthorization(uint128 maxTxValue);
 
     /// @notice Derive the policy identifier for `owner` and `salt`
     /// without creating anything — lets a caller compute their future
@@ -169,6 +178,16 @@ contract PolicyRegistry {
         if (_mandates[policyId].owner != address(0)) revert PolicyAlreadyExists(policyId);
         if (validUntil <= validFrom) revert InvalidTimeWindow(validFrom, validUntil);
         if (calls.length == 0 && nativeTransferTargets.length == 0) revert EmptyAuthorization();
+        // Footgun guard: `checkAuthorization` requires `value <= maxTxValue`
+        // for ANY authorized call, native transfer included. An owner who
+        // authorizes native-transfer targets but leaves maxTxValue at 0
+        // would silently get a policy that can never actually move any
+        // ETH — the native-transfer authorization would be permanently
+        // dead weight rather than doing what its own presence implies.
+        // Fail loudly at creation instead of silently at every execution.
+        if (nativeTransferTargets.length > 0 && maxTxValue == 0) {
+            revert UnreachableNativeTransferAuthorization(maxTxValue);
+        }
 
         for (uint256 i = 0; i < calls.length; i++) {
             if (calls[i].target == address(0)) revert ZeroAddress();
