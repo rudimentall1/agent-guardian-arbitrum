@@ -1,5 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { signTypedDataDigest } from "./typedDataTestHelpers";
+import { deploySmartWallet, fundSmartWallet } from "./smartWalletTestHelpers";
 
 /**
  * Property-based tests for AgentExecutionGuard's core nonce invariants.
@@ -75,7 +77,7 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
   }
 
   beforeEach(async function () {
-    [wallet] = await ethers.getSigners();
+    const [walletOwner] = await ethers.getSigners();
     agent = ethers.Wallet.createRandom().connect(ethers.provider);
 
     const MockRegistry = await ethers.getContractFactory("MockAgentRegistry");
@@ -103,6 +105,8 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
     guard = await Guard.deploy(await registry.getAddress(), await policyRegistry.getAddress());
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
+    wallet = await deploySmartWallet(agent.address, guardAddress);
+    await fundSmartWallet(wallet, ethers.parseEther("100"));
   });
 
   it(`holds across ${ITERATIONS} randomized nonce attempts (seed 0x${SEED.toString(16)})`, async function () {
@@ -152,9 +156,9 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
 
       const d = await domain();
       const calldataHash = ethers.keccak256("0x");
-      const sig = await agent.signTypedData(d, types, {
+      const sig = await signTypedDataDigest(agent, d, types, {
         agent: agent.address,
-        wallet: wallet.address,
+        wallet: await wallet.getAddress(),
         target: useTarget,
         value: 0n,
         calldataHash,
@@ -167,7 +171,7 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
 
       let reverted = false;
       try {
-        await guard.execute(agent.address, wallet.address, useTarget, 0n, "0x", attemptedNonce, deadline, ZERO_HASH, sig);
+        await guard.execute(agent.address, await wallet.getAddress(), useTarget, 0n, "0x", attemptedNonce, deadline, ZERO_HASH, sig);
       } catch (e) {
         reverted = true;
       }
@@ -220,9 +224,9 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
       }
 
       const d = await domain();
-      const sig = await agent.signTypedData(d, types, {
+      const sig = await signTypedDataDigest(agent, d, types, {
         agent: agent.address,
-        wallet: wallet.address,
+        wallet: await wallet.getAddress(),
         target: targetAddress,
         value,
         calldataHash: ethers.keccak256(data),
@@ -231,9 +235,7 @@ describe("AgentExecutionGuard: nonce invariants (seeded property tests)", functi
         policyHash: ZERO_HASH,
       });
 
-      await guard.execute(agent.address, wallet.address, targetAddress, value, data, expectedNonce, 4102444800n, ZERO_HASH, sig, {
-        value,
-      });
+      await guard.executeFromWallet(agent.address, await wallet.getAddress(), targetAddress, value, data, expectedNonce, 4102444800n, ZERO_HASH, sig);
 
       const call = await target.calls(i);
       expect(call.data).to.equal(data === "0x" ? "0x" : data);
