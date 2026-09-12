@@ -2,4 +2,5 @@
 /* tslint:disable */
 /* eslint-disable */
 export { IAgentRegistry__factory } from "./IAgentRegistry__factory";
+export { IAgentSmartWallet__factory } from "./IAgentSmartWallet__factory";
 export { IPolicyRegistry__factory } from "./IPolicyRegistry__factory";

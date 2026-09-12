@@ -4,4 +4,5 @@
 import type * as ierc7913Sol from "./IERC7913.sol";
 export type { ierc7913Sol };
 export type { IERC1271 } from "./IERC1271";
+export type { IERC1363 } from "./IERC1363";
 export type { IERC5267 } from "./IERC5267";

@@ -32,7 +32,9 @@ export interface AgentExecutionGuardInterface extends Interface {
       | "dailySpend"
       | "eip712Domain"
       | "execute"
+      | "executeFromWallet"
       | "executeWithApproval"
+      | "executeWithApprovalFromWallet"
       | "hashApproval"
       | "hashIntent"
       | "nextNonce"
@@ -81,7 +83,37 @@ export interface AgentExecutionGuardInterface extends Interface {
     ]
   ): string;
   encodeFunctionData(
+    functionFragment: "executeFromWallet",
+    values: [
+      AddressLike,
+      AddressLike,
+      AddressLike,
+      BigNumberish,
+      BytesLike,
+      BigNumberish,
+      BigNumberish,
+      BytesLike,
+      BytesLike
+    ]
+  ): string;
+  encodeFunctionData(
     functionFragment: "executeWithApproval",
+    values: [
+      AddressLike,
+      AddressLike,
+      AddressLike,
+      BigNumberish,
+      BytesLike,
+      BigNumberish,
+      BigNumberish,
+      BytesLike,
+      BytesLike,
+      BigNumberish,
+      BytesLike
+    ]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "executeWithApprovalFromWallet",
     values: [
       AddressLike,
       AddressLike,
@@ -156,7 +188,15 @@ export interface AgentExecutionGuardInterface extends Interface {
   ): Result;
   decodeFunctionResult(functionFragment: "execute", data: BytesLike): Result;
   decodeFunctionResult(
+    functionFragment: "executeFromWallet",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
     functionFragment: "executeWithApproval",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "executeWithApprovalFromWallet",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -326,7 +366,23 @@ export interface AgentExecutionGuard extends BaseContract {
       signature: BytesLike
     ],
     [string],
-    "payable"
+    "nonpayable"
+  >;
+
+  executeFromWallet: TypedContractMethod<
+    [
+      agent: AddressLike,
+      wallet: AddressLike,
+      target: AddressLike,
+      value: BigNumberish,
+      data: BytesLike,
+      nonce: BigNumberish,
+      deadline: BigNumberish,
+      policyHash: BytesLike,
+      signature: BytesLike
+    ],
+    [string],
+    "nonpayable"
   >;
 
   executeWithApproval: TypedContractMethod<
@@ -344,7 +400,25 @@ export interface AgentExecutionGuard extends BaseContract {
       approvalSignature: BytesLike
     ],
     [string],
-    "payable"
+    "nonpayable"
+  >;
+
+  executeWithApprovalFromWallet: TypedContractMethod<
+    [
+      agent: AddressLike,
+      wallet: AddressLike,
+      target: AddressLike,
+      value: BigNumberish,
+      data: BytesLike,
+      nonce: BigNumberish,
+      deadline: BigNumberish,
+      policyHash: BytesLike,
+      signature: BytesLike,
+      approvalDeadline: BigNumberish,
+      approvalSignature: BytesLike
+    ],
+    [string],
+    "nonpayable"
   >;
 
   hashApproval: TypedContractMethod<
@@ -442,7 +516,24 @@ export interface AgentExecutionGuard extends BaseContract {
       signature: BytesLike
     ],
     [string],
-    "payable"
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "executeFromWallet"
+  ): TypedContractMethod<
+    [
+      agent: AddressLike,
+      wallet: AddressLike,
+      target: AddressLike,
+      value: BigNumberish,
+      data: BytesLike,
+      nonce: BigNumberish,
+      deadline: BigNumberish,
+      policyHash: BytesLike,
+      signature: BytesLike
+    ],
+    [string],
+    "nonpayable"
   >;
   getFunction(
     nameOrSignature: "executeWithApproval"
@@ -461,7 +552,26 @@ export interface AgentExecutionGuard extends BaseContract {
       approvalSignature: BytesLike
     ],
     [string],
-    "payable"
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "executeWithApprovalFromWallet"
+  ): TypedContractMethod<
+    [
+      agent: AddressLike,
+      wallet: AddressLike,
+      target: AddressLike,
+      value: BigNumberish,
+      data: BytesLike,
+      nonce: BigNumberish,
+      deadline: BigNumberish,
+      policyHash: BytesLike,
+      signature: BytesLike,
+      approvalDeadline: BigNumberish,
+      approvalSignature: BytesLike
+    ],
+    [string],
+    "nonpayable"
   >;
   getFunction(
     nameOrSignature: "hashApproval"
