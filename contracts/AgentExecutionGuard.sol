@@ -2,11 +2,11 @@
 pragma solidity 0.8.24;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IAgentRegistry} from "./interfaces/IAgentRegistry.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
+import {IAgentSmartWallet} from "./interfaces/IAgentSmartWallet.sol";
 
 /// @title AgentExecutionGuard
 /// @notice Gate 2 + remediation + Gate 4A + Gate 4B execution boundary.
@@ -55,7 +55,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     error ApprovalExpired(uint256 approvalDeadline, uint256 currentTimestamp);
     error ApprovalDeadlineAfterIntent(uint256 approvalDeadline, uint256 intentDeadline);
     error ExecutionFailed(bytes returndata);
-    error ValueMismatch(uint256 sent, uint256 signed);
+    error GuardMustNotReceiveValue(uint256 value);
     error PolicyAgentMismatch(bytes32 policyHash, address intentAgent, address boundAgent);
     error PolicyOwnerMismatch(bytes32 policyHash, address registeredOwner, address policyOwner);
     error PolicyNotActive(bytes32 policyHash);
@@ -64,6 +64,8 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
     error DailyLimitExceeded(bytes32 policyHash, uint256 value, uint256 spent, uint256 dailyLimit);
     error DailySpendOverflow(bytes32 policyHash);
     error CallNotAuthorized(address target, bytes4 selector, bool isNativeTransfer);
+    error WalletNotBoundToThisGuard(address wallet, address walletsGuard);
+    error WalletNotContract(address wallet);
 
     constructor(address registry, address policyRegistry) EIP712("AgentExecutionGuard", "1") {
         if (registry == address(0) || policyRegistry == address(0)) revert ZeroAddress();
@@ -100,7 +102,7 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         bytes32 policyHash,
         bytes calldata signature
     ) external payable nonReentrant returns (bytes memory returndata) {
-        return _execute(agent, wallet, target, value, data, nonce, deadline, policyHash, signature, 0, hex"");
+        return _execute(agent, wallet, target, value, data, nonce, deadline, policyHash, signature, 0, hex"", false);
     }
 
     /// @notice Execute an intent together with a current-owner approval when
@@ -129,7 +131,62 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
             policyHash,
             signature,
             approvalDeadline,
-            approvalSignature
+            approvalSignature,
+            false
+        );
+    }
+
+    /// @notice Execute an intent that does not require an owner approval,
+    /// sourcing native value from `wallet`'s own balance via
+    /// `IAgentSmartWallet.execute` instead of from `msg.value`.
+    /// @dev `wallet` must have this Guard set as its `executionGuard`
+    /// (checked live, on every call, by `AgentSmartWallet` itself via its
+    /// `onlyExecutionGuard` modifier) вЂ” this function does not, and must
+    /// not, take that binding on faith. Reverts if any ETH is attached to
+    /// this call: in the wallet-custody model, value comes exclusively
+    /// from the wallet's balance, never from the caller.
+    function executeFromWallet(
+        address agent,
+        address wallet,
+        address target,
+        uint256 value,
+        bytes calldata data,
+        uint256 nonce,
+        uint256 deadline,
+        bytes32 policyHash,
+        bytes calldata signature
+    ) external nonReentrant returns (bytes memory returndata) {
+        return _execute(agent, wallet, target, value, data, nonce, deadline, policyHash, signature, 0, hex"", true);
+    }
+
+    /// @notice `executeWithApproval`, but sourcing value from `wallet`'s
+    /// own balance. See `executeFromWallet` for the custody model.
+    function executeWithApprovalFromWallet(
+        address agent,
+        address wallet,
+        address target,
+        uint256 value,
+        bytes calldata data,
+        uint256 nonce,
+        uint256 deadline,
+        bytes32 policyHash,
+        bytes calldata signature,
+        uint256 approvalDeadline,
+        bytes memory approvalSignature
+    ) external nonReentrant returns (bytes memory returndata) {
+        return _execute(
+            agent,
+            wallet,
+            target,
+            value,
+            data,
+            nonce,
+            deadline,
+            policyHash,
+            signature,
+            approvalDeadline,
+            approvalSignature,
+            true
         );
     }
 
@@ -144,14 +201,16 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         bytes32 policyHash,
         bytes calldata signature,
         uint256 approvalDeadline,
-        bytes memory approvalSignature
+        bytes memory approvalSignature,
+        bool fromWallet
     ) internal returns (bytes memory returndata) {
         if (agent == address(0) || wallet == address(0) || target == address(0)) revert ZeroAddress();
+        if (wallet.code.length == 0) revert WalletNotContract(wallet);
         if (pausedAgents[agent]) {
             revert AgentExecutionPaused(agent);
         }
         if (block.timestamp > deadline) revert IntentExpired(deadline, block.timestamp);
-        if (msg.value != value) revert ValueMismatch(msg.value, value);
+        if (msg.value != 0) revert GuardMustNotReceiveValue(msg.value);
 
         (IPolicyRegistry.CallKind callKind, bytes4 selector) = classifyCalldata(data);
 
@@ -208,8 +267,10 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         }
 
         bytes32 digest = hashIntent(agent, wallet, target, value, keccak256(data), nonce, deadline, policyHash);
-        address signer = ECDSA.recover(digest, signature);
-        if (signer != agent) revert InvalidSignature();
+        // SignatureChecker: plain ECDSA for EOA agents, ERC-1271
+        // `isValidSignature` for contract/TEE/AA agents. Strict superset
+        // of `ECDSA.recover` for the EOA case (see docs/adr/0009).
+        if (!SignatureChecker.isValidSignatureNow(agent, digest, signature)) revert InvalidSignature();
 
         if (uint256(spentToday) + uint256(amount) > type(uint128).max) {
             revert DailySpendOverflow(policyHash);
@@ -218,7 +279,24 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         dailySpend[policyHash] = DailySpend({day: day, spent: spentToday + amount});
         nextNonce[agent] = nonce + 1;
 
-        (bool success, bytes memory ret) = target.call{value: value}(data);
+        bool success;
+        bytes memory ret;
+        if (fromWallet) {
+            // Custody path: value is drawn from `wallet`'s own balance.
+            // `AgentSmartWallet.execute` reverts closed if this Guard is
+            // not its currently-configured `executionGuard`.
+            try IAgentSmartWallet(wallet).execute(target, value, data) returns (bytes memory walletRet) {
+                success = true;
+                ret = walletRet;
+            } catch (bytes memory walletErr) {
+                success = false;
+                ret = walletErr;
+            }
+        } else {
+            // Direct-funding path: value was attached as msg.value by
+            // the caller (relayer/agent) and is forwarded verbatim.
+            (success, ret) = target.call{value: value}(data);
+        }
         if (!success) revert ExecutionFailed(ret);
 
         emit IntentExecuted(agent, wallet, target, nonce, policyHash);
@@ -275,6 +353,3 @@ contract AgentExecutionGuard is EIP712, ReentrancyGuard {
         return _hashTypedDataV4(structHash);
     }
 }
-
-
-

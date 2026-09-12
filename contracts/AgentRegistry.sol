@@ -2,7 +2,7 @@
 pragma solidity 0.8.24;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /// @title AgentRegistry
 /// @notice Identity and lifecycle boundary for delegated autonomous agents.
@@ -106,8 +106,11 @@ contract AgentRegistry is EIP712 {
 
         bytes32 structHash = keccak256(abi.encode(AGENT_REGISTRATION_TYPEHASH, agent, owner, metadataHash));
         bytes32 digest = _hashTypedDataV4(structHash);
-        address signer = ECDSA.recover(digest, signature);
-        if (signer != agent) revert InvalidSignature();
+        // ERC-1271-aware: an EOA agent proves control the usual way; a
+        // contract/TEE/AA agent proves control via its own
+        // isValidSignature. This closes the EOA-only limitation recorded
+        // in docs/threat-model.md, "Gate 1 status".
+        if (!SignatureChecker.isValidSignatureNow(agent, digest, signature)) revert InvalidSignature();
 
         _agents[agent] = Agent({owner: owner, active: true, metadataHash: metadataHash, registeredAt: uint64(block.timestamp), recoveryAgent: address(0)});
 

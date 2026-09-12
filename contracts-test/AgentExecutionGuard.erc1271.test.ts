@@ -1,5 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { signTypedDataDigest } from "./typedDataTestHelpers";
+import { deploySmartWallet, fundSmartWallet } from "./smartWalletTestHelpers";
 
 describe("ERC-1271 contract owner approvals — adversarial", function () {
   const DEADLINE = 4102444800n;
@@ -18,7 +20,7 @@ describe("ERC-1271 contract owner approvals — adversarial", function () {
   ] };
 
   async function setup() {
-    const [ownerSigner, wallet, attacker] = await ethers.getSigners();
+    const [ownerSigner, attacker] = await ethers.getSigners();
     const agent = ethers.Wallet.createRandom().connect(ethers.provider);
     const registry = await (await ethers.getContractFactory("AgentRegistry")).deploy();
     await registry.waitForDeployment();
@@ -26,7 +28,7 @@ describe("ERC-1271 contract owner approvals — adversarial", function () {
     await contractOwner.waitForDeployment();
     const net = await ethers.provider.getNetwork();
     const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("erc1271"));
-    const registrationSignature = await agent.signTypedData(
+    const registrationSignature = await signTypedDataDigest(agent,
       { name: "AgentRegistry", version: "1", chainId: net.chainId, verifyingContract: await registry.getAddress() },
       registrationTypes,
       { agent: agent.address, owner: await contractOwner.getAddress(), metadataHash },
@@ -36,6 +38,8 @@ describe("ERC-1271 contract owner approvals — adversarial", function () {
     await policyRegistry.waitForDeployment();
     const guard = await (await ethers.getContractFactory("AgentExecutionGuard")).deploy(await registry.getAddress(), await policyRegistry.getAddress());
     await guard.waitForDeployment();
+    const wallet = await deploySmartWallet(await contractOwner.getAddress(), await guard.getAddress());
+    await fundSmartWallet(wallet, ethers.parseEther("10"));
     const target = await (await ethers.getContractFactory("RecordingTarget")).deploy();
     await target.waitForDeployment();
     const salt = ethers.keccak256(ethers.toUtf8Bytes("erc1271-policy"));
@@ -54,17 +58,17 @@ describe("ERC-1271 contract owner approvals — adversarial", function () {
     const targetAddress = await target.getAddress();
     const guardAddress = await guard.getAddress();
     const calldataHash = ethers.keccak256("0x");
-    const intent = { agent: agent.address, wallet: wallet.address, target: targetAddress, value, calldataHash, nonce: 0n, deadline: DEADLINE, policyHash };
-    const intentSignature = await agent.signTypedData(
+    const intent = { agent: agent.address, wallet: await wallet.getAddress(), target: targetAddress, value, calldataHash, nonce: 0n, deadline: DEADLINE, policyHash };
+    const intentSignature = await signTypedDataDigest(agent,
       { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress }, intentTypes, intent,
     );
     const approval = { ...intent, approvalDeadline: DEADLINE };
-    const approvalDigest = await guard.hashApproval(agent.address, wallet.address, targetAddress, value, calldataHash, 0n, DEADLINE, policyHash, DEADLINE);
-    const approvalSignature = await ownerSigner.signTypedData(
+    const approvalDigest = await guard.hashApproval(agent.address, await wallet.getAddress(), targetAddress, value, calldataHash, 0n, DEADLINE, policyHash, DEADLINE);
+    const approvalSignature = await signTypedDataDigest(ownerSigner,
       { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress }, approvalTypes, approval,
     );
     expect(await contractOwner.isValidSignature(approvalDigest, approvalSignature)).to.equal("0x1626ba7e");
-    await guard.executeWithApproval(agent.address, wallet.address, targetAddress, value, "0x", 0n, DEADLINE, policyHash, intentSignature, DEADLINE, approvalSignature, { value });
+    await guard.executeWithApprovalFromWallet(agent.address, await wallet.getAddress(), targetAddress, value, "0x", 0n, DEADLINE, policyHash, intentSignature, DEADLINE, approvalSignature);
     expect(await guard.nextNonce(agent.address)).to.equal(1n);
     expect((await guard.dailySpend(policyHash)).spent).to.equal(value);
   });
@@ -75,15 +79,15 @@ describe("ERC-1271 contract owner approvals — adversarial", function () {
     const targetAddress = await target.getAddress();
     const guardAddress = await guard.getAddress();
     const calldataHash = ethers.keccak256("0x");
-    const intentSignature = await agent.signTypedData(
+    const intentSignature = await signTypedDataDigest(agent,
       { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress }, intentTypes,
-      { agent: agent.address, wallet: wallet.address, target: targetAddress, value, calldataHash, nonce: 0n, deadline: DEADLINE, policyHash },
+      { agent: agent.address, wallet: await wallet.getAddress(), target: targetAddress, value, calldataHash, nonce: 0n, deadline: DEADLINE, policyHash },
     );
-    const invalidApproval = await attacker.signTypedData(
+    const invalidApproval = await signTypedDataDigest(attacker,
       { name: "AgentExecutionGuard", version: "1", chainId: net.chainId, verifyingContract: guardAddress }, approvalTypes,
-      { agent: agent.address, wallet: wallet.address, target: targetAddress, value, calldataHash, nonce: 0n, deadline: DEADLINE, policyHash, approvalDeadline: DEADLINE },
+      { agent: agent.address, wallet: await wallet.getAddress(), target: targetAddress, value, calldataHash, nonce: 0n, deadline: DEADLINE, policyHash, approvalDeadline: DEADLINE },
     );
-    await expect(guard.executeWithApproval(agent.address, wallet.address, targetAddress, value, "0x", 0n, DEADLINE, policyHash, intentSignature, DEADLINE, invalidApproval, { value }))
+    await expect(guard.executeWithApproval(agent.address, await wallet.getAddress(), targetAddress, value, "0x", 0n, DEADLINE, policyHash, intentSignature, DEADLINE, invalidApproval))
       .to.be.revertedWithCustomError(guard, "InvalidApprovalSignature");
     expect(await guard.nextNonce(agent.address)).to.equal(0n);
     expect((await guard.dailySpend(policyHash)).spent).to.equal(0n);

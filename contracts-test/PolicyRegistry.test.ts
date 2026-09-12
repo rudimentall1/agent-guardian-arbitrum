@@ -313,6 +313,20 @@ describe("PolicyRegistry", function () {
       ).to.be.revertedWithCustomError(registry, "ZeroAddress");
     });
 
+    it("rejects nativeTransferTargets paired with maxTxValue=0 (unreachable authorization footgun)", async function () {
+      const p = defaultParams({ calls: [], nativeTransferTargets: [targetA], maxTxValue: 0n });
+      await expect(
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      ).to.be.revertedWithCustomError(registry, "UnreachableNativeTransferAuthorization");
+    });
+
+    it("allows maxTxValue=0 when nativeTransferTargets is empty (function-call-only policy still valid)", async function () {
+      const p = defaultParams({ nativeTransferTargets: [], maxTxValue: 0n });
+      await expect(
+        registry.createPolicy(p.salt, p.agent, p.maxTxValue, p.dailyLimit, p.approvalThreshold, p.validFrom, p.validUntil, p.calls, p.nativeTransferTargets)
+      ).to.not.be.reverted;
+    });
+
     it("rejects a zero agent address", async function () {
       const p = defaultParams({ agent: ethers.ZeroAddress });
       await expect(

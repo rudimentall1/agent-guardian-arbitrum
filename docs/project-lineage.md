@@ -70,7 +70,7 @@ AI recommendation != execution permission
 agent wallet access != unrestricted authority
 ```
 
-The new system introduces financial mandates, signed intents, EIP-712 domain separation, policy commitments, replay protection, deterministic execution controls and chain adapters for Arbitrum and Robinhood Chain.
+The new system introduces financial mandates, signed intents, EIP-712 domain separation, policy commitments, replay protection, and deterministic execution controls. A chain adapter for Arbitrum (Sepolia, live — see `deployments.json`) is implemented; a Robinhood Chain adapter is a planned addition, not yet implemented in `hardhat.config.ts` or anywhere else in this repository.
 
 ## Engineering principle
 

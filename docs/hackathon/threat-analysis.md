@@ -1,278 +1,158 @@
-\# Agent Guardian Threat Analysis
+# Agent Guardian Threat Analysis
 
-
-
-\## Overview
-
-
+## Overview
 
 Autonomous AI agents will increasingly control wallets, execute transactions and interact with smart contracts.
-
-
 
 Existing blockchain permission systems were designed for human users.
 
 They do not provide sufficient protection for autonomous agents.
 
-
-
 Agent Guardian introduces a security layer between AI agents and blockchain execution.
 
+---
 
+# Threat Model
 
-\---
+## Threat 1 — Compromised Agent Key
 
-
-
-\# Threat Model
-
-
-
-\## Threat 1 — Compromised Agent Key
-
-
-
-\### Scenario
-
-
+### Scenario
 
 An AI agent private key is leaked or maliciously obtained.
 
-
-
-\### Risk
-
-
+### Risk
 
 The attacker can execute unauthorized actions using the agent identity.
 
-
-
-\### Mitigation
-
-
+### Mitigation
 
 Agent Guardian provides:
 
+- registered agent identity
 
+- execution authorization layer
 
-\- registered agent identity
+- guardian recovery mechanism
 
-\- execution authorization layer
+- emergency disable capability
 
-\- guardian recovery mechanism
+---
 
-\- emergency disable capability
+# Threat 2 — Malicious Agent Behavior
 
-
-
-\---
-
-
-
-\# Threat 2 — Malicious Agent Behavior
-
-
-
-\### Scenario
-
-
+### Scenario
 
 An autonomous agent behaves incorrectly because of:
 
+- model failure
 
+- prompt injection
 
-\- model failure
+- corrupted data
 
-\- prompt injection
+- malicious instructions
 
-\- corrupted data
-
-\- malicious instructions
-
-
-
-\### Risk
-
-
+### Risk
 
 The agent executes harmful transactions.
 
-
-
-\### Mitigation
-
-
+### Mitigation
 
 Policies define allowed agent behavior before execution.
 
-
-
 Future versions expand:
 
+- spending limits
 
+- target restrictions
 
-\- spending limits
+- time based permissions
 
-\- target restrictions
+- risk scoring
 
-\- time based permissions
+---
 
-\- risk scoring
+# Threat 3 — Unauthorized Ownership Changes
 
-
-
-\---
-
-
-
-\# Threat 3 — Unauthorized Ownership Changes
-
-
-
-\### Scenario
-
-
+### Scenario
 
 An attacker attempts to modify agent ownership.
 
-
-
-\### Risk
-
-
+### Risk
 
 Control over the autonomous agent is transferred.
 
-
-
-\### Mitigation
-
-
+### Mitigation
 
 Ownership actions are protected by explicit authorization rules.
 
+---
 
+# Threat 4 — Emergency Response Delay
 
-\---
-
-
-
-\# Threat 4 — Emergency Response Delay
-
-
-
-\### Scenario
-
-
+### Scenario
 
 A compromised agent continues operating.
 
-
-
-\### Risk
-
-
+### Risk
 
 Damage increases before intervention.
 
-
-
-\### Mitigation
-
-
+### Mitigation
 
 Guardian recovery enables immediate emergency shutdown.
 
+---
 
+# Security Principles
 
-\---
-
-
-
-\# Security Principles
-
-
-
-\## Least Privilege
-
-
+## Least Privilege
 
 Agents should receive only the permissions required for operation.
 
-
-
-\## Human Recovery Layer
-
-
+## Human Recovery Layer
 
 Autonomous systems require a trusted recovery mechanism.
 
-
-
-\## Transparent Enforcement
-
-
+## Transparent Enforcement
 
 Security decisions are executed on-chain.
 
-
-
-\## Immutable Auditability
-
-
+## Immutable Auditability
 
 Agent actions and security events remain verifiable.
 
+---
 
-
-\---
-
-
-
-\# Current MVP Security Scope
-
-
+# Current MVP Security Scope
 
 Implemented:
 
+- Agent identity registry
 
+- Agent registration
 
-\- Agent identity registry
+- Guardian assignment
 
-\- Agent registration
+- Emergency recovery
 
-\- Guardian assignment
-
-\- Emergency recovery
-
-\- Agent disabling
-
-
+- Agent disabling
 
 Planned:
 
+- spending limits
 
+- policy engine expansion
 
-\- spending limits
+- multi guardian recovery
 
-\- policy engine expansion
+- risk based execution
 
-\- multi guardian recovery
+- zero knowledge authorization proofs
 
-\- risk based execution
+---
 
-\- zero knowledge authorization proofs
-
-
-
-\---
-
-
-
-\# Security Vision
-
-
+# Security Vision
 
 Agent Guardian aims to become a security standard for autonomous AI agents operating with blockchain permissions.
 

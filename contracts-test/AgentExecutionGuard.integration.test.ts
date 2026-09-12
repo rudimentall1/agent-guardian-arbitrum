@@ -1,5 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { signTypedDataDigest } from "./typedDataTestHelpers";
+import { deploySmartWallet, fundSmartWallet } from "./smartWalletTestHelpers";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 /**
@@ -19,7 +21,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
   let targetAddress: string;
   let owner: HardhatEthersSigner;
   let newOwner: HardhatEthersSigner;
-  let wallet: HardhatEthersSigner;
+  let wallet: any;
   let agent: ReturnType<typeof ethers.Wallet.createRandom>;
 
   const METADATA_HASH = ethers.keccak256(ethers.toUtf8Bytes("agent-v1-config"));
@@ -60,9 +62,9 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
   async function signIntent(nonce: bigint, deadline = FAR_DEADLINE, policyHash = ZERO_HASH) {
     const d = await intentDomain();
     const calldataHash = ethers.keccak256("0x");
-    return agent.signTypedData(d, intentTypes, {
+    return await signTypedDataDigest(agent, d, intentTypes, {
       agent: agent.address,
-      wallet: wallet.address,
+      wallet: await wallet.getAddress(),
       target: targetAddress,
       value: 0n,
       calldataHash,
@@ -74,11 +76,11 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
 
   async function execute(nonce: bigint, deadline = FAR_DEADLINE) {
     const sig = await signIntent(nonce, deadline);
-    return guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", nonce, deadline, ZERO_HASH, sig);
+    return guard.execute(agent.address, await wallet.getAddress(), targetAddress, 0n, "0x", nonce, deadline, ZERO_HASH, sig);
   }
 
   beforeEach(async function () {
-    [owner, newOwner, wallet] = await ethers.getSigners();
+    [owner, newOwner] = await ethers.getSigners();
     agent = ethers.Wallet.createRandom().connect(ethers.provider);
 
     const Registry = await ethers.getContractFactory("AgentRegistry");
@@ -108,9 +110,11 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
     guard = await Guard.deploy(registryAddress, policyRegistryAddress);
     await guard.waitForDeployment();
     guardAddress = await guard.getAddress();
+    wallet = await deploySmartWallet(owner.address, guardAddress);
+    await fundSmartWallet(wallet, ethers.parseEther("10"));
 
     const rd = await registrationDomain();
-    const regSig = await agent.signTypedData(rd, registrationTypes, {
+    const regSig = await signTypedDataDigest(agent, rd, registrationTypes, {
       agent: agent.address,
       owner: owner.address,
       metadataHash: METADATA_HASH,
@@ -126,9 +130,9 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
   it("rejects execution for an agent that was never registered", async function () {
     const strangerAgent = ethers.Wallet.createRandom().connect(ethers.provider);
     const d = await intentDomain();
-    const sig = await strangerAgent.signTypedData(d, intentTypes, {
+    const sig = await signTypedDataDigest(strangerAgent, d, intentTypes, {
       agent: strangerAgent.address,
-      wallet: wallet.address,
+      wallet: await wallet.getAddress(),
       target: targetAddress,
       value: 0n,
       calldataHash: ethers.keccak256("0x"),
@@ -137,7 +141,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
       policyHash: ZERO_HASH,
     });
     await expect(
-      guard.execute(strangerAgent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
+      guard.execute(strangerAgent.address, await wallet.getAddress(), targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
     ).to.be.revertedWithCustomError(guard, "AgentNotActive");
   });
 
@@ -160,7 +164,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
       // AgentRegistry.isActiveAgent is checked live at execution time —
       // AgentExecutionGuard needed no explicit revocation logic of its own.
       await expect(
-        guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
+        guard.execute(agent.address, await wallet.getAddress(), targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
       ).to.be.revertedWithCustomError(guard, "AgentNotActive");
     });
 
@@ -180,7 +184,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
       // check would. Reactivating the AGENT does not, and must not,
       // resurrect a policy that belongs to a since-departed owner.
       await expect(
-        guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
+        guard.execute(agent.address, await wallet.getAddress(), targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
       ).to.be.revertedWithCustomError(guard, "PolicyOwnerMismatch").withArgs(ZERO_HASH, newOwner.address, owner.address);
     });
 
@@ -191,7 +195,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
 
       // old policy: still correctly dead (see previous test)
       await expect(
-        guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
+        guard.execute(agent.address, await wallet.getAddress(), targetAddress, 0n, "0x", 0n, FAR_DEADLINE, ZERO_HASH, sig)
       ).to.be.reverted;
 
       // the new owner establishes their OWN policy for the same agent
@@ -206,7 +210,7 @@ describe("AgentExecutionGuard + AgentRegistry integration", function () {
       // the SAME agent key signs a new intent referencing the new
       // policy — succeeds immediately.
       const newSig = await signIntent(0n, FAR_DEADLINE, newPolicyHash);
-      await guard.execute(agent.address, wallet.address, targetAddress, 0n, "0x", 0n, FAR_DEADLINE, newPolicyHash, newSig);
+      await guard.execute(agent.address, await wallet.getAddress(), targetAddress, 0n, "0x", 0n, FAR_DEADLINE, newPolicyHash, newSig);
       expect(await guard.nextNonce(agent.address)).to.equal(1n);
     });
 

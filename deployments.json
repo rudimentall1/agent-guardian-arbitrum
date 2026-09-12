@@ -1,9 +1,10 @@
 {
-  "network": "arbitrumSepolia",
-  "chainId": 421614,
-  "contracts": {
-    "AgentRegistry": "0x249761b2F52258e74C91F5CD345Bd9C447aD18F3",
-    "PolicyRegistry": "0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87",
-    "AgentExecutionGuard": "0x8845f20D83dAD3a494073F1AE1aEB6F9f85146AD"
+  "arbitrumSepolia": {
+    "agentRegistry": "0x249761b2F52258e74C91F5CD345Bd9C447aD18F3",
+    "policyRegistry": "0x77Af1625CC230dB6BAA25c40d629A225b1BFCf87",
+    "agentExecutionGuard": "0x8845f20D83dAD3a494073F1AE1aEB6F9f85146AD",
+    "exampleAgentSmartWallet": null,
+    "chainId": 421614,
+    "_note": "UNVERIFIED as of this remediation pass — an internet outage in the auditing session prevented checking these against sepolia.arbiscan.io, and a DIFFERENT set of addresses exists in docs/hackathon/submission.md and docs/hackathon/FINAL_CHECKLIST.md for the same contracts. Before relying on these addresses (or citing them to judges), re-run `npx hardhat run scripts/deploy.ts --network arbitrumSepolia` with a funded deployer key and treat the fresh output — which this script now also deploys AgentSmartWallet and wires it to the Guard, and writes automatically to this file — as the only source of truth. Then regenerate docs/hackathon/submission.md and FINAL_CHECKLIST.md from this file instead of hand-editing them."
   }
 }
