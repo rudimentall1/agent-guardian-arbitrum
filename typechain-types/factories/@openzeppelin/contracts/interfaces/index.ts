@@ -3,4 +3,5 @@
 /* eslint-disable */
 export * as ierc7913Sol from "./IERC7913.sol";
 export { IERC1271__factory } from "./IERC1271__factory";
+export { IERC1363__factory } from "./IERC1363__factory";
 export { IERC5267__factory } from "./IERC5267__factory";

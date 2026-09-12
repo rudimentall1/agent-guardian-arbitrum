@@ -2,4 +2,5 @@
 /* tslint:disable */
 /* eslint-disable */
 export type { IAgentRegistry } from "./IAgentRegistry";
+export type { IAgentSmartWallet } from "./IAgentSmartWallet";
 export type { IPolicyRegistry } from "./IPolicyRegistry";
