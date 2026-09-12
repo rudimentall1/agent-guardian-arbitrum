@@ -32,6 +32,10 @@ const config: HardhatUserConfig = {
       chainId: 421614,
     },
   },
+
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
+  },
 };
 
 export default config;
