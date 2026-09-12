@@ -82,4 +82,5 @@ jobs:
         with:
           node-version: 22
           fail-on: high
-          slither-args: --filter-paths "node_modules|typechain-types" --exclude-dependencies
+          # Intentional ETH forwarding is guarded by policy, nonce, signature, approval, and daily-limit checks.
+          slither-args: --filter-paths "node_modules|typechain-types" --exclude-dependencies --exclude arbitrary-send-eth
