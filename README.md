@@ -2,6 +2,8 @@
 
 ## Autonomous Agent Security Layer for Arbitrum
 
+**[Watch the demo video](https://youtu.be/z7_GXu9Phwc)** — architecture walkthrough + live run on Arbitrum Sepolia.
+
 Agent Guardian is a security framework for autonomous AI agents operating on-chain.
 
 The protocol allows AI agents to execute transactions while enforcing strict security boundaries:

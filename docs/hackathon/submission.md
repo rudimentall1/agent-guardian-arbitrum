@@ -2,6 +2,8 @@
 
 ## Autonomous AI Agent Security Layer for Web3
 
+**[Demo video](https://youtu.be/z7_GXu9Phwc)** — architecture, security model, and a live run against Arbitrum Sepolia.
+
 ### Overview
 
 AI agents are becoming capable of performing real blockchain operations:

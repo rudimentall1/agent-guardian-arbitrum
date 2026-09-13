@@ -92,10 +92,10 @@ This is a hackathon prototype. Known gaps, in priority order:
 ## Submission Ready
 
 - Prototype: YES (on-chain enforcement layer)
-- Live deployment: see `deployments.json` — pending a fresh, verified
-  deploy (the addresses on file as of this checklist update have not
-  been re-verified against Arbiscan)
-- Demo: partial — contract-level demo scenario above is test-covered;
-  no recorded video/screenshots yet (see `docs/hackathon/screenshots/`)
+- Live deployment: verified on Arbitrum Sepolia — see `deployments.json`
+  and `docs/hackathon/screenshots/` for verified-contract screenshots
+- Demo: YES — [video walkthrough](https://youtu.be/z7_GXu9Phwc) covering
+  architecture and a live run on Arbitrum Sepolia; contract-level
+  scenario above is also test-covered
 - Documentation: YES, reconciled with actual contract behavior as of
   this update
