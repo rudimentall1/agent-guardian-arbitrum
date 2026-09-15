@@ -1,7 +1,7 @@
 {
   "name": "agent-guardian-arbitrum",
   "version": "1.0.0",
-  "description": "Security infrastructure for autonomous financial agents on Arbitrum. Deployed on Arbitrum Sepolia; Robinhood Chain support is planned, not yet implemented.",
+  "description": "Security infrastructure for autonomous financial agents on Arbitrum. Deployed on Arbitrum Sepolia and Arbitrum One; Robinhood Chain support is planned, not yet implemented.",
   "main": "index.js",
   "directories": {
     "doc": "docs"

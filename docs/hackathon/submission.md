@@ -103,9 +103,22 @@ GitHub Actions also runs compile and tests, coverage and Slither. The latest suc
 
 ## Deployment
 
-The current deployment is on **Arbitrum Sepolia**, chain ID `421614`.
+The same Agent Guardian implementation is deployed on both Arbitrum Sepolia and Arbitrum One.
 
-Contract addresses are stored in [`deployments.json`](../../deployments.json).
+### Arbitrum Sepolia
+
+- Chain ID: `421614`
+- Used for the existing public demo and the original Singapore hackathon submission.
+
+### Arbitrum One
+
+- Chain ID: `42161`
+- Mainnet deployment of the same contracts and security model.
+- Used for Arbitrum mainnet deployment validation and mainnet-focused hackathon submissions.
+
+The demo video was recorded on Arbitrum Sepolia. It is intentionally kept as the recorded demo environment and is not presented as an Arbitrum One demo.
+
+Contract addresses for both networks are maintained in [`deployments.json`](../../deployments.json).
 
 ## Current scope
 

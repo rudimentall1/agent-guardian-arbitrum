@@ -39,7 +39,7 @@ The current main branch has:
 - **77.55% branch coverage**
 - Slither passing in CI
 
-The current deployment target is Arbitrum Sepolia.
+The repository currently contains deployments on Arbitrum Sepolia and Arbitrum One. The existing demo runs on Arbitrum Sepolia.
 
 Demo:
 

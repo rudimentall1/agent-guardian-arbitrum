@@ -41,13 +41,22 @@ Real Foundry/Echidna fuzzing has not been run. The current `*.fuzz.test.ts` cove
 ## Deployment
 
 - [x] Arbitrum Sepolia deployment
+- [x] Arbitrum One deployment
 - [x] Deployment addresses recorded in `deployments.json`
 - [x] Demo video published
 - [x] Current demo matches the contract architecture
 
-Network: **Arbitrum Sepolia**
+### Arbitrum Sepolia
 
-Chain ID: **421614**
+- Chain ID: **421614**
+- Role: existing public demo and testnet deployment
+
+### Arbitrum One
+
+- Chain ID: **42161**
+- Role: mainnet deployment of the same Agent Guardian implementation
+
+The demo video reflects the Arbitrum Sepolia environment. The Arbitrum One deployment is a separate live deployment of the same contracts and security model.
 
 ## Demo
 
@@ -73,6 +82,8 @@ These items are future work. They are not presented as implemented features.
 
 **Technical prototype: READY**
 
-**Deployment and demo: READY**
+**Arbitrum Sepolia deployment and demo: READY**
 
-**Documentation: READY after the final documentation update**
+**Arbitrum One deployment: READY**
+
+**Documentation: READY after the final documentation consistency check**
