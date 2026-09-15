@@ -6,5 +6,13 @@
     "exampleAgentSmartWallet": "0x37F36574fb5B771c336C86448fb801f91814ee12",
     "deployer": "0x1429906b663608DB6aDeAb8F975B47aFbbe8c68C",
     "deployedAt": "2026-09-12T12:55:29.772Z"
+  },
+  "arbitrumOne": {
+    "agentRegistry": "0xF064DcDd1ea4A573Ff38A7f9Adcc7bE2357d4D3d",
+    "policyRegistry": "0x50D7a2f73432CcBA1264Cf53d534Baf5e6cd0573",
+    "agentExecutionGuard": "0x1A846b2571DA430fa1368B3e520aa7Eb8ef9EE84",
+    "exampleAgentSmartWallet": "0xe72b15706aEfA1DE60A23D75D717cc16481BDE8f",
+    "deployer": "0x1429906b663608DB6aDeAb8F975B47aFbbe8c68C",
+    "deployedAt": "2026-09-15T16:01:33.844Z"
   }
 }

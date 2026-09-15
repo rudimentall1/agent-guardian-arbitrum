@@ -31,6 +31,14 @@ const config: HardhatUserConfig = {
         : [],
       chainId: 421614,
     },
+
+    arbitrumOne: {
+      url: process.env.ARB_ONE_RPC || "https://arb1.arbitrum.io/rpc",
+      accounts: process.env.PRIVATE_KEY
+        ? [process.env.PRIVATE_KEY]
+        : [],
+      chainId: 42161,
+    },
   },
 
   etherscan: {
