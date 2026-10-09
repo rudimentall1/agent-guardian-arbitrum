@@ -10,7 +10,7 @@ Select the preview to play the video in your browser.
 
 **Give autonomous agents a wallet they can use, but never permission to use it beyond policy.**
 
-**[Watch the demo video](https://youtu.be/z7_GXu9Phwc)** — architecture walkthrough + live run on Arbitrum Sepolia.
+Architecture walkthrough and live run on Arbitrum Sepolia.
 
 Agent Guardian is a security framework for autonomous AI agents operating on-chain.
 
